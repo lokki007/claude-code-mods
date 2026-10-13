@@ -369,3 +369,19 @@ test('model-written text cannot smuggle links, images, markup or hidden lines', 
   expect(drawn.includes('](')).toBe(false)
 })
 
+
+test('/recap with no recap yet brews one for the chat as it stands, and a short reply after edits still counts', async ($, on) => {
+  const empty = { ask: 'hi', steps: [], edits: 0, research: 0, tools: 0 }
+  expect(isWorthRecap(logTool(empty, { tool: 'Write', file_path: '/x/quotes.html' }), 'Done.', false)).toBe(true)
+  expect(isWorthRecap(logTool(empty, { tool: 'Write', file_path: '/x/quotes.html' }), '', false)).toBe(false)
+
+  const { clock, seen } = world(on)
+  on('command.run', () => ({ text: '' }) as any)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  const said = await ($ as any).command.run({ command: 'recap', args: '' })
+  await clock.settle()
+  expect(String(said?.text ?? '')).toContain('Brewing options for this chat')
+  expect(seen.opened).toEqual(['recap'])
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  expect(await ui.find({ key: 'pick-o0' })).toBeDefined()
+})

@@ -136,15 +136,18 @@ export const register: Register = on => {
   on('command.run', { command: 'recap' }, async ($, e) => {
     const job = await read($, lastJob)
     const backlog = await read($, backlogAtom)
-    if (job === null && backlog.length === 0) {
-      return { text: 'Nothing yet: the pane appears after a turn that edits files or digs through research.' }
+    await $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS, focus: true })
+    const hasRecap = (await read($, current)) !== null
+    // No recap yet (the last turn was small, or the chat began before the mod loaded): recap the chat as it stands.
+    if (e.args.trim() === 'again' || !hasRecap) {
+      const now = await $.clock.now()
+      const target: Job = job ?? { turnId: `manual-${now.toString(36)}`, log: { ...EMPTY_LOG, ask: 'this conversation so far' }, answer: '' }
+      if (job === null) await update($, lastJob, () => target)
+      await update($, viewAtom, () => 'options')
+      $.clock.after(0, () => void brew($, target.turnId, target.log, target.answer))
+      return { text: hasRecap ? 'Brewing fresh options…' : 'Brewing options for this chat…' }
     }
-    await $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS })
-    if (e.args.trim() === 'again' && job !== null) {
-      $.clock.after(0, () => void brew($, job.turnId, job.log, job.answer))
-      return { text: 'Brewing fresh options…' }
-    }
-    if (job === null) await update($, viewAtom, () => 'backlog')
+    if (backlog.length > 0 && (await read($, current))?.status !== 'ready') await update($, viewAtom, () => 'backlog')
     return { text: 'Next-prompt pane opened.' }
   })
 

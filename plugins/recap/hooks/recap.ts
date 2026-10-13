@@ -56,7 +56,7 @@ export const logTool = (log: TurnLog, e: { tool: string } & Record<string, any>)
 
 /** Worth a recap: something was changed, or real digging happened. */
 export const isWorthRecap = (log: TurnLog, answer: string, isAborted: boolean): boolean =>
-  !isAborted && answer.trim().length >= 80 && (log.edits >= 1 || log.research >= 3 || log.tools >= 5)
+  !isAborted && answer.trim().length > 0 && (log.edits >= 1 || log.research >= 3 || log.tools >= 5)
 
 /** The lanes, in the order the pane lists them: icon, name, colour. */
 export const LANES: Record<Lane, { icon: string; name: string; color: string }> = {
