@@ -63,7 +63,7 @@ It also keeps track for you:
 - **A log for debugging**: every attempt, whether it worked and why, in `~/.claude/recap/log.jsonl` (`/recap log`).
 - **A plain warning** if two copies of the mod end up loaded in one chat, instead of failing quietly. turn-status does the same.
 
-Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap diary` and `/recap log` show those files.
+Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap diary` and `/recap log` show those files. Newer Claude versions have a built-in `/recap`; there the same commands start with `/next` instead (`/next`, `/next again`, and so on), and the mod tells you once.
 
 What's next for it: a [daily digest across all your projects](docs/daily-digest-sketch.md) (a sketch).
 
