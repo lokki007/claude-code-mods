@@ -19,6 +19,8 @@ export type Option = {
   needsYou: boolean
   /** the prompt that asks for it */
   prompt: string
+  /** set when the idea worked in another of the person's projects: that project's name */
+  borrowed?: string
 }
 
 /** A ready-made bundle of options: take it whole, or save it for later. */
@@ -38,6 +40,8 @@ export type Recap = {
   tldr: string
   verdict: Verdict
   verdictWhy: string
+  /** a short, jargon-free note about the work for the person's client (missing on older recaps) */
+  client?: string
   options: Option[]
   packages: Package[]
   error: string
@@ -83,6 +87,9 @@ export type Interview = {
 /** How often each lane has been in what the person sent: the gentle ranking nudge. */
 export type Learned = Partial<Record<Lane, number>>
 
+/** An idea the person picked and sent, remembered so other projects can borrow it. */
+export type Win = { title: string; detail: string; prompt: string; lanes: Lane[]; effort: 'S' | 'M' | 'L'; project: string; at: number }
+
 /** The last turn worth a recap, kept so a new take works after a reload too. */
 export type Job = {
   turnId: string
@@ -103,6 +110,8 @@ declare module 'claude-code' {
       view: View
       /** a plain warning for the pane header, such as a second copy of the mod */
       warning: string | null
+      /** whether the "Explain to client" note is open */
+      client: boolean
     }
   }
 }

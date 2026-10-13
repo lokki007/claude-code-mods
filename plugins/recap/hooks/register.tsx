@@ -1,18 +1,18 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Package, Picks, Prefs, Recap, View } from '../types'
+import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Package, Picks, Prefs, Recap, View, Win } from '../types'
 import { owlSvg } from './owl'
 import type { Instance, ProjectLast } from './journal'
 import {
-  appendLine, dataDir, diaryEntry, diaryFile, diaryHeader, duplicateWarning, otherCopies, projectKey, reminderFor,
+  appendLine, dataDir, diaryEntry, diaryFile, diaryHeader, duplicateWarning, otherCopies, projectKey, projectName, reminderFor,
   skipReason, withInstance,
 } from './journal'
 import type { HistoryRow, Takes, TurnLog } from './recap'
 import {
   AUTONOMY, DEPLOY, INTERVIEW_DESCRIPTION, INTERVIEW_SCHEMA, LANES, LANE_KEYS, SYSTEM, answer, answersText,
-  bestInLane, composePrompt, digestFrom, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
-  md, packageOf, parseQuestions, parseTakes, promptFor, ranked, savePackage, toggleSaved, topPicks, willInterview,
+  bestInLane, borrowable, clientNote, composePrompt, digestFrom, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
+  md, packageOf, packageSize, parseQuestions, parseTakes, promptFor, ranked, rememberWins, savePackage, toggleSaved, topPicks, willInterview,
 } from './recap'
 
 const PANE = 'recap'
@@ -30,6 +30,7 @@ const learnedAtom = atom({ plugin: 'recap', key: 'learned' } as const, {})
 const interviewAtom = atom({ plugin: 'recap', key: 'interview' } as const, null)
 const viewAtom = atom({ plugin: 'recap', key: 'view' } as const, 'options')
 const warningAtom = atom({ plugin: 'recap', key: 'warning' } as const, null)
+const clientAtom = atom({ plugin: 'recap', key: 'client' } as const, false)
 
 const EMPTY_LOG: TurnLog = { ask: '', steps: [], edits: 0, research: 0, tools: 0 }
 const VERDICT = { done: '💚', in_progress: '🟡', blocked: '🟥' } as const
@@ -131,7 +132,7 @@ async function keep($: EngineInterface, r: Recap) {
   try {
     const path = diaryFile(here.dir, here.cwd)
     const existing = (await $.fs.exists(path)) ? String(await $.fs.read(path)) : diaryHeader(here.cwd)
-    await $.fs.write(path, existing + diaryEntry(r, at))
+    await $.fs.write(path, existing + diaryEntry(r, at, ranked(r.options, {})[0]?.title))
   } catch (err) {
     await note($, 'diary-failed', { why: err instanceof Error ? err.message : String(err) })
   }
@@ -151,8 +152,11 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
   let source = 'conversation'
   try {
     const saved = await read($, backlogAtom)
-    const forked = await $.model.fork({ prompt: forkPrompt(answerText, saved) })
-    takes = forked.isAnswered ? parseTakes(forked.text) : null
+    const wins = (await $.store.get('wins')) as Win[] | undefined
+    const ideas = borrowable(Array.isArray(wins) ? wins : [], projectName(here.cwd))
+    const projects = [...new Set(ideas.map(i => i.project))]
+    const forked = await $.model.fork({ prompt: forkPrompt(answerText, saved, ideas) })
+    takes = forked.isAnswered ? parseTakes(forked.text, projects) : null
     if (takes === null) {
       source = 'history fallback'
       await note($, 'fork-skipped', { turnId, why: forked.isAnswered ? 'reply was not readable' : forked.reason })
@@ -164,9 +168,9 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
         if (Array.isArray(rows)) digest = digestFrom(rows as unknown as HistoryRow[])
       }
       const reply = await $.model.complete({
-        model: 'haiku', system: SYSTEM, prompt: promptFor(digest.log, digest.answer, saved), maxTokens: 8000, effort: 'low',
+        model: 'haiku', system: SYSTEM, prompt: promptFor(digest.log, digest.answer, saved, ideas), maxTokens: 8000, effort: 'low',
       })
-      takes = reply.isAnswered ? parseTakes(reply.text) : null
+      takes = reply.isAnswered ? parseTakes(reply.text, projects) : null
       why = reply.isAnswered ? 'the owl mumbled something unreadable' : `the model said no (${reply.reason})`
     }
   } catch (err) {
@@ -312,6 +316,7 @@ export const register: Register = on => {
     const learned = await read($, learnedAtom)
     const iv = await read($, interviewAtom)
     const warning = await read($, warningAtom)
+    const isClientOpen = await read($, clientAtom)
     const hasInterview = iv !== null && iv.status === 'open'
     const hasOptions = r !== null && r.status === 'ready'
     let view: View = await read($, viewAtom)
@@ -354,6 +359,13 @@ export const register: Register = on => {
         <Box flexShrink={1} flexGrow={1}>
           <Markdown text={`${HEAD_H[prefs.size]}${headline}`} />
         </Box>
+        {hasOptions
+          ? (
+            <Button key="client" variant={isClientOpen ? 'primary' : 'secondary'} onPress={() => update($, clientAtom, x => !x)}>
+              ✉ Explain to client
+            </Button>
+          )
+          : null}
         <Button key="smaller" variant="secondary" onPress={() => setPrefs({ size: Math.max(1, prefs.size - 1) as Prefs['size'] })}>A−</Button>
         <Button key="bigger" variant="secondary" onPress={() => setPrefs({ size: Math.min(3, prefs.size + 1) as Prefs['size'] })}>A+</Button>
         {r !== null && r.status !== 'brewing'
@@ -370,9 +382,32 @@ export const register: Register = on => {
           : null}
       </Box>
     )
-    const warned = warning
-      ? <Box flexDirection="column">{header}<Text color="#E5A84D">{warning}</Text></Box>
-      : header
+    // "Explain to client": a short, jargon-free note about the latest work, ready to copy.
+    const note = hasOptions && isClientOpen ? clientNote(r!, ranked(r!.options, learned)[0]?.title) : ''
+    const clientBox = note
+      ? (
+        <Box flexDirection="column" borderStyle="round" borderColor="#7FB77E" paddingX={1}>
+          <Text bold>For your client</Text>
+          <Text>{note}</Text>
+          <Box flexDirection="row" gap={1} marginTop={1}>
+            <Button key="client-copy" variant="primary" onPress={async press => {
+              const copied = await $.ui.copy({ text: note, surface: press.surface })
+              $.ui.toast(copied.isCopied ? 'Copied: paste it into your email or chat' : "Couldn't copy here: select the text instead")
+            }}>
+              Copy
+            </Button>
+            <Button key="client-close" variant="secondary" onPress={() => update($, clientAtom, () => false)}>Close</Button>
+          </Box>
+        </Box>
+      )
+      : null
+    const warned = (
+      <Box flexDirection="column" gap={1}>
+        {header}
+        {warning ? <Text color="#E5A84D">{warning}</Text> : null}
+        {clientBox}
+      </Box>
+    )
 
     const tabs = (
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
@@ -475,6 +510,8 @@ export const register: Register = on => {
       const nextLearned = learnFrom(learned, picked)
       await update($, learnedAtom, () => nextLearned)
       await $.store.set('learned', nextLearned)
+      const wins = (await $.store.get('wins')) as Win[] | undefined
+      await $.store.set('wins', rememberWins(Array.isArray(wins) ? wins : [], picked, projectName(here.cwd), await $.clock.now()))
       if (how === 'submit') {
         void $.prompt.submit({ text: composed })
         return
@@ -498,7 +535,7 @@ export const register: Register = on => {
         <Markdown key={`opt-${o.id}`} text={`${TITLE_H[prefs.size]}${md(o.title)}${badges ? `  ${badges}` : ''}`} />
         <Markdown
           dimColor
-          text={`${o.lanes.map(l => LANES[l].icon).join('')} ${md(o.detail)} · ${EFFORT[o.effort]} · ${o.needsYou ? '💬 your call' : '🤖 Claude can decide'}${extra ? ` · ${extra}` : ''}`}
+          text={`${o.borrowed ? `↪ borrowed from ${md(o.borrowed)} · ` : ''}${o.lanes.map(l => LANES[l].icon).join('')} ${md(o.detail)} · ${EFFORT[o.effort]} · ${o.needsYou ? '💬 your call' : '🤖 Claude can decide'}${extra ? ` · ${extra}` : ''}`}
         />
       </Box>
     )
@@ -558,7 +595,7 @@ export const register: Register = on => {
                     const lanes = [...new Set(p.ids.flatMap(id => options.find(o => o.id === id)?.lanes ?? []))]
                     return (
                       <Box key={`pkg-${i}`} width={e.props.bodyColumns >= 120 ? '32%' : '100%'} flexDirection="column" borderStyle="round" borderColor={isUsed ? '#A487E0' : undefined} borderDimColor={!isUsed} paddingX={1}>
-                        <Text bold>{`${p.name} · ${p.ids.length}`}</Text>
+                        <Text bold>{`${p.name} · ${p.ids.length} · ${packageSize(p, options)}`}</Text>
                         <Markdown dimColor text={`${lanes.slice(0, 4).map(l => LANES[l].icon).join('')} ${md(p.pitch)}`} />
                         <Box flexDirection="row" flexWrap="wrap" gap={1}>
                           <Button key={`pkg-use-${i}`} variant={isUsed ? 'primary' : 'secondary'} onPress={() => setPicks(pk => ({ ...pk, chosen: isUsed ? [] : [...p.ids] }))}>

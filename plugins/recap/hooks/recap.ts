@@ -1,4 +1,4 @@
-import type { Autonomy, BacklogItem, Deploy, Interview, Lane, Learned, Option, Package, Question, Verdict } from '../types'
+import type { Autonomy, BacklogItem, Deploy, Interview, Lane, Learned, Option, Package, Question, Verdict, Win } from '../types'
 
 // Pure parts: when a turn earns a recap, what to ask the model, reading its
 // answer, ranking the options, and building the next prompt from the picks.
@@ -75,6 +75,7 @@ const SHAPE = `Reply with JSON only, no code fence, exactly these keys:
 "tldr": at most 20 words: what was done and the outcome
 "verdict": "done" when the goal the person asked for is fully reached and verified, "in_progress" when part of it remains, "blocked" when it cannot go on without the person
 "verdict_why": at most 12 words
+"client": 2 to 4 short sentences the person can send their client as a progress update: what changed for the client or their customers, why it matters, and what is next. Warm and plain, no file names, code, tool names, version numbers or technical words
 "options": 28 to 40 possible next moves for this project, as varied and creative as you can make them, so the person can scan them all and pick the vital few. Think first from the point of view of the project's customers or users: what would make them happier, trust it more, come back, pay or tell a friend. Use everything you saw in the code and the conversation: bugs, inconsistencies, shortcuts, missed opportunities, and where the project could go. Cover at least 6 of these lanes:
   "fix": bugs, broken or unverified things
   "debt": refactors, inconsistencies, cleanup, missing tests
@@ -84,7 +85,7 @@ const SHAPE = `Reply with JSON only, no code fence, exactly these keys:
   "growth": users, leads, marketing, distribution
   "ship": deploying, releasing, monitoring, operations
   "wild": fresh, bold or creative bets the person probably has not thought of (at least 6 of these)
-Each option is {"title": at most 9 plain words, "detail": at most 18 words on what it is and why it matters, "lanes": 1 to 3 lane keys, most related first, "impact": 1 to 5 for the value if done, "effort": "S", "M" or "L", "needs_you": true when it turns on the person's own taste, ideas or business knowledge (a new feature, a design direction, pricing), false when it can be done well from the code alone (bugs, refactors, tests, deploys), "prompt": the prompt that asks for it, first person, imperative, at most 35 words}.
+Each option is {"title": at most 9 plain words, "detail": at most 18 words on what it is and why it matters, "lanes": 1 to 3 lane keys, most related first, "impact": 1 to 5 for the value if done, "effort": "S", "M" or "L", "needs_you": true when it turns on the person's own taste, ideas or business knowledge (a new feature, a design direction, pricing), false when it can be done well from the code alone (bugs, refactors, tests, deploys), "prompt": the prompt that asks for it, first person, imperative, at most 35 words, "borrowed": only for an idea taken from the person's other projects (when any are listed): that project's name; otherwise leave it out}.
 "packages": 3 to 5 ready-made bundles of the options above that make sense done together, each a different size and aim: for example "the 2 big ones" (two major moves), a pack of about 7 quick wins, and a pack of about 12 for a bigger push (a launch, a redesign, a growth sprint). Each is {"name": at most 4 words, "pitch": at most 18 words on what the customer gets from it, "options": the option numbers in it (1 is the first option above), in the order to do them}. Packages may share options.
 The person is not very technical: write titles and details in plain language, and never plan to ask them technical questions.`
 
@@ -95,25 +96,31 @@ export const savedNote = (saved: readonly { title: string; pack?: string }[]): s
     ? ''
     : `\nThe person saved these for later (newest first). Bring back, with the exact same title, any that still matter after this turn, and use them in packages where they fit:\n${saved.slice(0, 30).map(s => `- ${s.title}${s.pack ? ` (saved with "${s.pack}")` : ''}`).join('\n')}\n`
 
-export const forkPrompt = (answer: string, saved: readonly { title: string; pack?: string }[] = []): string =>
+/** Ideas the person picked and ran in their other projects, for the model to borrow where they fit. */
+export const borrowNote = (ideas: readonly { title: string; project: string }[]): string =>
+  ideas.length === 0
+    ? ''
+    : `\nIdeas the person picked and ran in their other projects. Where one would genuinely help this project too, include it as an option adapted to this project, with "borrowed" set to that project's name; skip any that do not fit:\n${ideas.slice(0, 15).map(i => `- ${i.title} (from ${i.project})`).join('\n')}\n`
+
+export const forkPrompt = (answer: string, saved: readonly { title: string; pack?: string }[] = [], ideas: readonly { title: string; project: string }[] = []): string =>
   `[Recap request from the person's recap pane, not a new task. Do not continue the work.]
 Recap the turn that just finished against the goal the person asked for, then lay out what could come next. Your last reply follows, in case it is not above:
 """
 ${answer.slice(0, 6000)}
 """
-Be accurate to what was actually done and verified; never invent results.${savedNote(saved)}
+Be accurate to what was actually done and verified; never invent results.${savedNote(saved)}${borrowNote(ideas)}
 ${SHAPE}`
 
 export const SYSTEM = `You recap a coding assistant's finished work against the goal the person asked for, then lay out what could come next.
 Be accurate to what was actually done and verified; never invent results.
 ${SHAPE}`
 
-export const promptFor = (log: TurnLog, answer: string, saved: readonly { title: string; pack?: string }[] = []): string => {
+export const promptFor = (log: TurnLog, answer: string, saved: readonly { title: string; pack?: string }[] = [], ideas: readonly { title: string; project: string }[] = []): string => {
   const steps = log.steps.length > 0 ? log.steps.map(s => `- ${s}`).join('\n') : '- (no tools)'
-  return `The person asked:\n${one(log.ask, 1200) || '(continuation of earlier work)'}\n\nWhat the assistant did, in order:\n${steps}\n\nThe assistant's final reply:\n${answer.slice(0, 6000)}${savedNote(saved)}`
+  return `The person asked:\n${one(log.ask, 1200) || '(continuation of earlier work)'}\n\nWhat the assistant did, in order:\n${steps}\n\nThe assistant's final reply:\n${answer.slice(0, 6000)}${savedNote(saved)}${borrowNote(ideas)}`
 }
 
-export type Takes = { tldr: string; verdict: Verdict; verdictWhy: string; options: Option[]; packages: Package[] }
+export type Takes = { tldr: string; verdict: Verdict; verdictWhy: string; client: string; options: Option[]; packages: Package[] }
 
 /**
  * Model-written text made safe to show and to send: links and images reduced
@@ -142,7 +149,7 @@ const VERDICTS = new Set<Verdict>(['done', 'in_progress', 'blocked'])
 const EFFORTS = new Set(['S', 'M', 'L'])
 
 /** Reads the model's JSON, tolerating a code fence or chatter around it. */
-export const parseTakes = (text: string): Takes | null => {
+export const parseTakes = (text: string, projects: readonly string[] = []): Takes | null => {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) return null
@@ -154,7 +161,11 @@ export const parseTakes = (text: string): Takes | null => {
       .map((o, i) => {
         const lanes = [...new Set(list(o?.lanes).filter((l): l is Lane => l in LANES))].slice(0, 3)
         const impact = Math.min(5, Math.max(1, Math.round(Number(o?.impact) || 3)))
+        // Borrowed only from a project the model was actually shown, spelled as the person knows it.
+        const from = plain(o?.borrowed, 60).toLowerCase()
+        const borrowed = from ? projects.find(p => p.toLowerCase() === from) : undefined
         return {
+          ...(borrowed ? { borrowed } : {}),
           id: `o${i}`,
           title: plain(o?.title, 90),
           detail: plain(o?.detail, 200),
@@ -179,10 +190,69 @@ export const parseTakes = (text: string): Takes | null => {
       })
       .filter(p => p.name && p.ids.length >= 2)
       .slice(0, 5)
-    return { tldr, verdict: j.verdict, verdictWhy: plain(j.verdict_why, 120), options, packages }
+    return { tldr, verdict: j.verdict, verdictWhy: plain(j.verdict_why, 120), client: forClient(plain(j.client, 600)), options, packages }
   } catch {
     return null
   }
+}
+
+/**
+ * Text for a client: file paths, file names, code and version numbers taken
+ * out, as a safety net under the model's own plain wording.
+ */
+export const forClient = (s: string): string =>
+  s
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\b[A-Za-z]:[\\/][^\s,;)]*/g, ' ') // C:\path or C:/path
+    .replace(/(^|\s)(?:~|\.{1,2})?\/?(?:[\w.-]+\/)+[\w-]+\.[A-Za-z0-9]{1,5}\b/g, '$1a file') // some/dir/file.ts
+    .replace(/(^|\s)(?:~|\.{1,2})?\/?(?:[\w.-]+\/){2,}[\w.-]*/g, '$1') // some/dir/ (one slash, as in "and/or", stays)
+    .replace(/\b[\w-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|html?|css|scss|py|rb|go|rs|java|kt|swift|sh|ps1|ya?ml|toml|lock|sql|txt|env)\b/gi, 'a file')
+    .replace(/\bv?\d+\.\d+\.\d+\b/g, 'the new version')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+/** Rough working time per option size, in minutes. */
+const EFFORT_MINUTES = { S: 15, M: 45, L: 150 } as const
+
+/** A package's rough size from its options' effort: quick, about an hour, a few hours, about a day or a few days. */
+export const packageSize = (pack: Package, options: readonly Option[]): string => {
+  const minutes = pack.ids.reduce((sum, id) => sum + EFFORT_MINUTES[options.find(o => o.id === id)?.effort ?? 'M'], 0)
+  if (minutes <= 45) return '⚡ quick'
+  if (minutes <= 120) return '⏱ about an hour'
+  if (minutes <= 300) return '⏱ a few hours'
+  if (minutes <= 720) return '📅 about a day'
+  return '📅 a few days'
+}
+
+const STATUS_FOR_CLIENT = { done: 'Done', in_progress: 'In progress', blocked: 'Waiting on a decision' } as const
+
+/** The note behind "Explain to client": ready to paste into an email or chat. */
+export const clientNote = (r: { tldr: string; verdict: Verdict; client?: string }, next?: string): string => {
+  const body = (r.client && r.client.trim()) || forClient(r.tldr)
+  const lines = [body, '', `Status: ${STATUS_FOR_CLIENT[r.verdict]}`]
+  if (next) lines.push(`Next up: ${forClient(next)}`)
+  return lines.join('\n')
+}
+
+/** Remembers what the person sent, newest first, one entry per idea per project. */
+export const rememberWins = (wins: readonly Win[], picked: readonly Option[], project: string, now: number): Win[] => {
+  const fresh: Win[] = picked.map(o => ({ title: o.title, detail: o.detail, prompt: o.prompt, lanes: o.lanes, effort: o.effort, project, at: now }))
+  const key = (w: Win) => `${w.project.toLowerCase()}|${w.title.toLowerCase()}`
+  const seen = new Set(fresh.map(key))
+  return [...fresh, ...wins.filter(w => w && typeof w.title === 'string' && !seen.has(key(w)))].slice(0, 80)
+}
+
+/** Ideas from the person's other projects worth offering here: newest first, one per title. */
+export const borrowable = (wins: readonly Win[], project: string): { title: string; project: string }[] => {
+  const out: { title: string; project: string }[] = []
+  for (const w of wins) {
+    if (!w || typeof w.title !== 'string' || typeof w.project !== 'string') continue
+    if (w.project.toLowerCase() === project.toLowerCase()) continue
+    if (out.some(o => o.title.toLowerCase() === w.title.toLowerCase())) continue
+    out.push({ title: w.title, project: w.project })
+  }
+  return out.slice(0, 15)
 }
 
 const EFFORT_COST = { S: 1, M: 1.25, L: 1.6 } as const

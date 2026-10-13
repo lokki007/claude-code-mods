@@ -1,5 +1,6 @@
 import type { Recap } from '../types'
 import type { TurnLog } from './recap'
+import { forClient } from './recap'
 
 // Pure parts of the recap's memory: why a turn got no recap, the per-project
 // diary and reminder, the debug log, and spotting a second copy of the mod.
@@ -32,18 +33,22 @@ export const skipReason = (log: TurnLog, answer: string, isAborted: boolean): st
 }
 
 const DAY = 86_400_000
-const when = (at: number) => new Date(at).toISOString().replace('T', ' ').slice(0, 16)
 const LABEL = { done: 'Done', in_progress: 'In progress', blocked: 'Blocked' } as const
 
 /** The diary's opening lines, written once per project. */
 export const diaryHeader = (cwd: string) =>
-  `# ${projectName(cwd)}: progress log\n\nWhat was worked on, newest last. Each entry is written when a piece of work finishes.\n`
+  `# ${projectName(cwd)}: progress updates\n\nA running record of the work, newest last. Each update is added when a piece of work finishes.\n`
 
-/** One diary entry: plain, client-readable, no internal jargon. */
-export const diaryEntry = (r: Recap, at: number) => {
-  const asked = r.ask.trim() && !r.ask.startsWith('this conversation') ? `\n- **Asked for:** ${r.ask.replace(/\s+/g, ' ').slice(0, 240)}` : ''
-  const why = r.verdictWhy ? ` (${r.verdictWhy})` : ''
-  return `\n## ${when(at)} UTC\n\n- **What was done:** ${r.tldr}${asked}\n- **Status:** ${LABEL[r.verdict]}${why}\n`
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const STATUS = { done: '✅ Done', in_progress: '🟡 In progress', blocked: '⏸ Waiting on a decision' } as const
+
+/** One diary entry, written as a client progress update: outcomes in plain words, no paths or jargon. */
+export const diaryEntry = (r: Recap, at: number, next?: string) => {
+  const d = new Date(at)
+  const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+  const body = (r.client && r.client.trim()) || forClient(r.tldr)
+  const coming = next ? `\n\n**Coming up next:** ${forClient(next)}` : ''
+  return `\n## ${date}\n\n**${STATUS[r.verdict]}.** ${body}${coming}\n`
 }
 
 /** The most recent recap of a project, kept across chats. */

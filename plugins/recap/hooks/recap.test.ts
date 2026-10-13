@@ -5,7 +5,7 @@ import {
   parseQuestions, parseTakes, ranked, score, toggleSaved, topPicks,
 } from './recap'
 import type { Option } from '../types'
-import { savePackage, packageOf, forkPrompt } from './recap'
+import { savePackage, packageOf, forkPrompt, forClient, packageSize, clientNote, rememberWins, borrowable } from './recap'
 import { diaryEntry, diaryFile, otherCopies, reminderFor, skipReason, withInstance } from './journal'
 
 const OPTIONS = [
@@ -22,7 +22,8 @@ const PACKAGES = [
   { name: 'Quick wins', pitch: 'Small, safe improvements customers notice.', options: [1, 2, 5] },
   { name: 'Broken', pitch: 'Points at nothing.', options: [99] },
 ]
-const TAKES = { tldr: 'Moved the fixes onto main; one conflict left.', verdict: 'in_progress', verdict_why: 'Conflict blocks merge.', options: OPTIONS, packages: PACKAGES }
+const CLIENT = 'The fixes are now live for your team. One small clash in src/db/migrate.ts remains; we will clear it next.'
+const TAKES = { tldr: 'Moved the fixes onto main; one conflict left.', verdict: 'in_progress', verdict_why: 'Conflict blocks merge.', client: CLIENT, options: OPTIONS, packages: PACKAGES }
 const QUESTIONS = {
   questions: [
     { question: 'Who is this mostly for?', options: [{ label: 'Just me' }, { label: 'Friends', recommended: true }, { label: 'Paying users', hint: 'needs accounts' }] },
@@ -145,19 +146,24 @@ const memoryFs = (on: any) => {
 /** Command names the fake Claude refuses, as newer versions refuse /recap (it is built in). */
 const refusedCommands = new Set<string>()
 
-const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> = {}, session = 'chat-1') => {
+const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> = {}, session = 'chat-1', isLiveStore = false) => {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
-  mock.store(on, store)
+  if (isLiveStore) {
+    // The store object itself is read and written, so a test can look inside it afterwards.
+    on('store.get', ($: any, e: any) => ({ value: store[e.key] }) as any)
+    on('store.set', ($: any, e: any) => { store[e.key] = e.value; return { value: undefined } as any })
+  } else mock.store(on, store)
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const files = memoryFs(on)
   on('session.id', () => ({ value: session }) as any)
-  const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[], forks: [] as string[] }
+  const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[], forks: [] as string[], copied: [] as string[] }
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: 'G:\\quotes' }) as any)
   on('command.register', ($: any, e: any) => (refusedCommands.has(e.name) ? { deny: `"/${e.name}" refused: it is the built-in /${e.name}` } : { value: undefined }) as any)
   on('tool.register', ($: any, e: any) => { seen.tools.push(e.name); return { value: { tool: `mcp__recap__${e.name}` } } as any })
   on('ui.open', ($: any, e: any) => { seen.opened.push(e.id); return { value: { isPlaced: true } } as any })
   on('ui.toast', ($: any, e: any) => { seen.toasts.push(e.text); return { value: undefined } as any })
+  on('ui.copy', ($: any, e: any) => { seen.copied.push(e.text); return { value: { isCopied: true } } as any })
   on('prompt.read', () => ({ value: { text: '', cursor: 0 } }) as any)
   on('prompt.fill', ($: any, e: any) => { seen.filled.push(e.text); return { isFilled: true } as any })
   on('prompt.suggest', ($: any, e: any) => { seen.suggested.push(e.text); return { isShown: true } as any })
@@ -452,8 +458,11 @@ test('journal helpers: skip reasons, diary entries, reminders, copy check', asyn
   expect(diaryFile('C:/Users/me/.claude/recap', 'G:/Quotes App')).toMatch(/^C:\/Users\/me\/\.claude\/recap\/diary\/quotes-app-[a-z0-9]+\.md$/)
 
   const r = { ...parseTakes(JSON.stringify(TAKES))!, status: 'ready' as const, turnId: 't1', ask: 'move the fixes to main', error: '' }
-  expect(diaryEntry(r, Date.UTC(2026, 9, 13, 9, 5))).toBe(
-    '\n## 2026-10-13 09:05 UTC\n\n- **What was done:** Moved the fixes onto main; one conflict left.\n- **Asked for:** move the fixes to main\n- **Status:** In progress (Conflict blocks merge.)\n')
+  expect(diaryEntry(r, Date.UTC(2026, 9, 13, 9, 5), 'Fix the migration conflict')).toBe(
+    '\n## 13 October 2026\n\n**🟡 In progress.** The fixes are now live for your team. One small clash in a file remains; we will clear it next.\n\n**Coming up next:** Fix the migration conflict\n')
+  // An older recap with no client note falls back to its summary, cleaned the same way.
+  expect(diaryEntry({ ...r, client: undefined, tldr: 'Edited C:\\site\\index.html and bumped to 2.4.1' }, Date.UTC(2026, 9, 13))).toBe(
+    '\n## 13 October 2026\n\n**🟡 In progress.** Edited and bumped to the new version\n')
 
   const now = Date.UTC(2026, 9, 13)
   expect(reminderFor({ recap: r, at: now - 86_400_000 }, now, 'Fix the conflict')).toBe(
@@ -490,8 +499,11 @@ test('each finished recap adds one diary entry, once per piece of work', async (
   await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
   await workTurn($, clock, 't1')
   const diaryPath = [...files.keys()].find(k => k.includes('/diary/'))!
-  expect(files.get(diaryPath)).toContain('# quotes: progress log')
-  expect(files.get(diaryPath)).toContain('- **What was done:** Moved the fixes onto main; one conflict left.')
+  expect(files.get(diaryPath)).toContain('# quotes: progress updates')
+  expect(files.get(diaryPath)).toContain('**🟡 In progress.** The fixes are now live for your team.')
+  expect(files.get(diaryPath)).toContain('**Coming up next:** Fix the migration conflict')
+  expect(files.get(diaryPath)).not.toContain('src/')
+  expect(files.get(diaryPath)).not.toContain('move the fixes to main')
   // A fresh take on the same turn does not add a second entry.
   await ($ as any).command.run({ command: 'recap', args: 'again' })
   await clock.settle()
@@ -617,4 +629,70 @@ test('when Claude refuses /recap, the pane answers to /next and everything else 
   } finally {
     refusedCommands.clear()
   }
+})
+
+test('client wording: no paths, file names, code or version numbers', async () => {
+  expect(forClient('Updated `useQuotes()` in G:\\quotes\\app.tsx and ./lib/api/client.ts, shipped v1.2.3.')).toBe('Updated in and a file, shipped the new version.')
+  expect(forClient('Customers can save and/or share quotes.')).toBe('Customers can save and/or share quotes.')
+  expect(forClient('Tidied the README.md wording.')).toBe('Tidied the a file wording.')
+  expect(clientNote({ tldr: 'x', verdict: 'done', client: 'Your shop now loads twice as fast.' }, 'Add gift cards')).toBe(
+    'Your shop now loads twice as fast.\n\nStatus: Done\nNext up: Add gift cards')
+  expect(clientNote({ tldr: 'Fixed C:/a/b.ts', verdict: 'blocked' })).toBe('Fixed\n\nStatus: Waiting on a decision')
+})
+
+test('package sizes come from their options\' effort', async () => {
+  const opt = (id: string, effort: 'S' | 'M' | 'L') => ({ id, effort }) as Option
+  const options = [opt('a', 'S'), opt('b', 'S'), opt('c', 'M'), opt('d', 'L'), opt('e', 'L'), opt('f', 'L'), opt('g', 'L'), opt('h', 'L')]
+  const size = (...ids: string[]) => packageSize({ name: 'p', pitch: '', ids }, options)
+  expect(size('a', 'b')).toBe('⚡ quick')
+  expect(size('a', 'c')).toBe('⏱ about an hour')
+  expect(size('c', 'd')).toBe('⏱ a few hours')
+  expect(size('d', 'e', 'f')).toBe('📅 about a day')
+  expect(size('d', 'e', 'f', 'g', 'h', 'c')).toBe('📅 a few days')
+})
+
+test('ideas run in one project are offered to others, marked as borrowed', async () => {
+  const t = parseTakes(JSON.stringify(TAKES))!
+  const wins = rememberWins([], [t.options[4]!], 'shop', 1)
+  expect(borrowable(wins, 'quotes')).toEqual([{ title: 'Quote of the day email', project: 'shop' }])
+  expect(borrowable(wins, 'Shop')).toEqual([])
+  // Sending the same idea again keeps one entry, newest first.
+  expect(rememberWins(wins, [t.options[4]!, t.options[0]!], 'shop', 2).map(w => [w.title, w.at])).toEqual([
+    ['Quote of the day email', 2], ['Fix the migration conflict', 2]])
+  // Only a project the model was shown counts as a source.
+  const reply = JSON.stringify({ ...TAKES, options: [{ ...OPTIONS[0], borrowed: 'SHOP' }, { ...OPTIONS[1], borrowed: 'evil.example' }] })
+  const parsed = parseTakes(reply, ['shop'])!
+  expect(parsed.options[0]!.borrowed).toBe('shop')
+  expect(parsed.options[1]!.borrowed).toBeUndefined()
+})
+
+test('Explain to client shows a plain note to copy; borrowed ideas and package sizes show in the pane', async ($, on) => {
+  const wins = rememberWins([], [{ id: 'x', title: 'Weekly digest email', detail: '', lanes: ['growth'], impact: 3, effort: 'M', needsYou: false, prompt: 'Add a weekly digest' }], 'shop', 1)
+  const borrowedTakes = { ...TAKES, options: [{ ...OPTIONS[0], borrowed: 'shop' }, ...OPTIONS.slice(1)] }
+  const store: Record<string, unknown> = { wins }
+  const { clock, seen } = world(on, borrowedTakes, store, 'chat-1', true)
+  await $.session.start({ cwd: 'G:\\quotes', surface: 'desktop', isInteractive: true })
+  await workTurn($, clock)
+  await clock.settle()
+  expect(seen.forks[0]).toContain('- Weekly digest email (from shop)')
+
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  const text = JSON.stringify(await ui.drawn())
+  expect(text).toContain('↪ borrowed from shop')
+  expect(text).toContain('The 2 big ones · 2 · ⏱ a few hours')
+  expect(text).not.toContain('For your client')
+
+  await ui.press({ key: 'client' })
+  const note = 'The fixes are now live for your team. One small clash in a file remains; we will clear it next.\n\nStatus: In progress\nNext up: Fix the migration conflict'
+  expect(JSON.stringify(await ui.drawn())).toContain('For your client')
+  await ui.press({ key: 'client-copy' })
+  expect(seen.copied).toEqual([note])
+  expect(seen.toasts).toContain('Copied: paste it into your email or chat')
+  await ui.press({ key: 'client-close' })
+  expect(JSON.stringify(await ui.drawn())).not.toContain('For your client')
+
+  // What the person sends is remembered for their other projects.
+  await ui.press({ key: 'pick-o3' })
+  await ui.press({ key: 'fill' })
+  expect((store.wins as any[])[0]).toMatchObject({ title: 'Paid quote packs', project: 'quotes' })
 })
