@@ -378,3 +378,30 @@ export const answersText = (iv: Interview): string => {
   const note = plain(iv.note, 500) ? `\n\nAlso: ${plain(iv.note, 500)}` : ''
   return `My answers:\n\n${lines.join('\n')}${note}\n\nGo ahead, and make every technical decision yourself.`
 }
+
+/** One row of the session's history, as `$.session.messages()` hands it. */
+export type HistoryRow = {
+  role: 'user' | 'assistant'
+  text: string
+  toolUses?: { tool: string; input: Record<string, unknown> }[]
+  toolResults?: unknown[]
+}
+
+/**
+ * The chat as it stands, for the small model when the fork cannot answer: the
+ * person's recent requests, the steps taken since the first of them, and the
+ * assistant's last reply. Built from the real history, so a recap made with
+ * /recap (no turn recorded since the mod loaded) is still about the real work.
+ */
+export const digestFrom = (rows: readonly HistoryRow[]): { log: TurnLog; answer: string } => {
+  const recent = rows.slice(-80)
+  // A person's message is one with words and no tool results riding in it.
+  const asks = recent.filter(r => r.role === 'user' && r.text.trim() && !(r.toolResults?.length)).map(r => r.text)
+  let log: TurnLog = { ask: asks.slice(-3).map(a => one(a, 600)).join('\n…then: '), steps: [], edits: 0, research: 0, tools: 0 }
+  for (const r of recent) {
+    if (r.role !== 'assistant') continue
+    for (const u of r.toolUses ?? []) log = logTool(log, { tool: u.tool, ...u.input })
+  }
+  const answer = [...recent].reverse().find(r => r.role === 'assistant' && r.text.trim())?.text ?? ''
+  return { log, answer }
+}

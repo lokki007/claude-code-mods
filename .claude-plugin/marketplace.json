@@ -9,7 +9,7 @@
       "name": "recap",
       "source": "./plugins/recap",
       "description": "Next-prompt builder after real work: many color-coded options across fix, tech debt, features, design, money, growth, ship and wild ideas, ranked 80/20; pick a few, choose where it lands and whether Claude interviews you first.",
-      "version": "0.8.1"
+      "version": "0.8.2"
     },
     {
       "name": "turn-status",

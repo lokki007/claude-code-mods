@@ -1,7 +1,7 @@
 import { test, expect, mock } from 'claude-code/testing'
 
 import {
-  md, plain, answer, answersText, bestInLane, composePrompt, favourites, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
+  md, plain, digestFrom, answer, answersText, bestInLane, composePrompt, favourites, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
   parseQuestions, parseTakes, ranked, score, toggleSaved, topPicks,
 } from './recap'
 import type { Option } from '../types'
@@ -141,7 +141,10 @@ const world = (on: any, takes: unknown = TAKES) => {
   on('turn.start', ($: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: 'ok', isError: false }) as any)
-  on('model.fork', () => ({ value: { isAnswered: true, text: JSON.stringify(takes), usage: {} } }) as any)
+  // takes null: the fork has nothing to answer from, as right after the mod reloads.
+  on('model.fork', () => (takes === null
+    ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
+    : { value: { isAnswered: true, text: JSON.stringify(takes), usage: {} } }) as any)
   return { clock, seen }
 }
 
@@ -384,4 +387,29 @@ test('/recap with no recap yet brews one for the chat as it stands, and a short 
   expect(seen.opened).toEqual(['recap'])
   const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
   expect(await ui.find({ key: 'pick-o0' })).toBeDefined()
+})
+
+test('when the fork cannot answer, the small model gets the real chat history, not a blank', async ($, on) => {
+  const rows = [
+    { role: 'user', text: 'Make the homepage booking button the main call to action' },
+    { role: 'assistant', text: 'On it.', toolUses: [{ tool: 'Edit', input: { file_path: 'C:/site/index.html' } }, { tool: 'Bash', input: { command: 'npm run build' } }] },
+    { role: 'user', text: '', toolResults: [{ tool_use_id: 'a' }] },
+    { role: 'assistant', text: 'The homepage changes are done and committed, but not live yet.' },
+  ]
+  const d = digestFrom(rows as any)
+  expect(d.log.ask).toContain('booking button')
+  expect(d.log.steps).toEqual(['Edit index.html', 'ran: npm run build'])
+  expect(d.answer).toContain('not live yet')
+
+  const { clock } = world(on, null)
+  let asked = ''
+  on('session.messages', () => ({ value: rows }) as any)
+  on('model.complete', ($: any, e: any) => { asked = String(e.prompt); return { value: { isAnswered: true, text: JSON.stringify(TAKES), usage: {} } } as any })
+  on('command.run', () => ({ text: '' }) as any)
+  await $.session.start({ cwd: 'G:\site', surface: 'desktop', isInteractive: true })
+  await ($ as any).command.run({ command: 'recap', args: '' })
+  await clock.settle()
+  expect(asked).toContain('booking button')
+  expect(asked).toContain('Edit index.html')
+  expect(asked).toContain('not live yet')
 })

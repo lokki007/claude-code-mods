@@ -3,10 +3,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Picks, Prefs, Recap, View } from '../types'
 import { owlSvg } from './owl'
-import type { Takes, TurnLog } from './recap'
+import type { HistoryRow, Takes, TurnLog } from './recap'
 import {
   AUTONOMY, DEPLOY, INTERVIEW_DESCRIPTION, INTERVIEW_SCHEMA, LANES, LANE_KEYS, SYSTEM, answer, answersText,
-  bestInLane, composePrompt, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
+  bestInLane, composePrompt, digestFrom, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
   md, parseQuestions, parseTakes, promptFor, ranked, toggleSaved, topPicks, willInterview,
 } from './recap'
 
@@ -53,8 +53,15 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
     const forked = await $.model.fork({ prompt: forkPrompt(answerText) })
     takes = forked.isAnswered ? parseTakes(forked.text) : null
     if (takes === null) {
+      // The fork could not answer. Without a recorded turn (a /recap right after the mod loaded) the
+      // small model would know nothing, so give it the chat's real history instead.
+      let digest = { log: turnLog, answer: answerText }
+      if (turnLog.steps.length === 0 || !answerText.trim()) {
+        const rows = await $.session.messages()
+        if (Array.isArray(rows)) digest = digestFrom(rows as unknown as HistoryRow[])
+      }
       const reply = await $.model.complete({
-        model: 'haiku', system: SYSTEM, prompt: promptFor(turnLog, answerText), maxTokens: 3000, effort: 'low',
+        model: 'haiku', system: SYSTEM, prompt: promptFor(digest.log, digest.answer), maxTokens: 3000, effort: 'low',
       })
       takes = reply.isAnswered ? parseTakes(reply.text) : null
       why = reply.isAnswered ? 'the owl mumbled something unreadable' : `the model said no (${reply.reason})`
