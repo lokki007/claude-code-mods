@@ -566,3 +566,17 @@ test('use one package now, save another for later, and the next recap hears abou
   expect(seen.forks.at(-1)).toContain('The person saved these for later')
   expect(seen.forks.at(-1)).toContain('- Quote of the day email (saved with "Quick wins")')
 })
+
+test('a crafted package name stays plain text in the Saved tab', async ($, on) => {
+  const evil = { ...TAKES, packages: [{ name: '**Bold** [click](https://evil.example/x) _now_', pitch: 'Look *here*', options: [1, 2] }] }
+  const { clock } = world(on, evil)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await workTurn($, clock, 't1')
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  await ui.press({ key: 'pkg-save-0' })
+  await ui.press({ key: 'tab-backlog' })
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn.includes('evil.example')).toBe(false)
+  // The name arrives escaped (shown as written, never as bold, italics or a link).
+  expect(await ui.find({ text: '📦 \\*\\*Bold\\*\\* click \\_now\\_' })).toBeDefined()
+})

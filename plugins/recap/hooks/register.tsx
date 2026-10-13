@@ -313,7 +313,7 @@ export const register: Register = on => {
         : r.status === 'brewing'
           ? 'Brewing options…'
           : r.status === 'error'
-            ? `Couldn't plan: ${r.error}`
+            ? `Couldn't plan: ${md(r.error)}`
             : `${VERDICT[r.verdict]} ${md(r.tldr)}${r.origin === 'earlier' ? ' _(from an earlier chat)_' : ''}`
     const header = (
       <Box flexDirection="row" alignItems="center" gap={1}>
@@ -486,7 +486,7 @@ export const register: Register = on => {
                 {pickButton(o)}
                 <Button key={`unsave-${o.id}`} variant="secondary" onPress={() => toggleSave(o)}>✕</Button>
                 {bars(o)}
-                {optionBody(o, '', `${o.pack ? `📦 ${o.pack} · ` : ''}saved ${new Date(o.savedAt).toISOString().slice(0, 10)}`)}
+                {optionBody(o, '', `${o.pack ? `📦 ${md(o.pack)} · ` : ''}saved ${new Date(o.savedAt).toISOString().slice(0, 10)}`)}
               </Box>
             ))}
           </Box>
