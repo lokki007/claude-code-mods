@@ -1,0 +1,5 @@
+# Laid down by Claude Code for the editor when a mod loads; not part of the mod.
+.claude-plugin/types/
+plugins/*/.claude-plugin/types/
+plugins/*/tsconfig.json
+node_modules/

@@ -1,0 +1,21 @@
+{
+  "name": "lokki-mods",
+  "owner": {
+    "name": "lokki007"
+  },
+  "description": "Claude Code mods: a next-prompt builder pane and a quiet live status band.",
+  "plugins": [
+    {
+      "name": "recap",
+      "source": "./plugins/recap",
+      "description": "Next-prompt builder after real work: many color-coded options across fix, tech debt, features, design, money, growth, ship and wild ideas, ranked 80/20; pick a few, choose where it lands and whether Claude interviews you first.",
+      "version": "0.7.0"
+    },
+    {
+      "name": "turn-status",
+      "source": "./plugins/turn-status",
+      "description": "A quiet band above the prompt: what Claude is doing, how long, task progress and failures; hides when idle.",
+      "version": "0.4.0"
+    }
+  ]
+}
