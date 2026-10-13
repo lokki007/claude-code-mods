@@ -27,6 +27,10 @@ Needs a recent Claude Code (one that supports hooks-module plugins, 2.1.29x or l
 
 ## recap: your next-prompt builder
 
+![The ✨ Next pane in the Claude desktop app: 17 next moves, color-coded by direction, with + Pick and ☆ Save on each](docs/recap-pane.png)
+
+*The ✨ Next pane in the Claude desktop app, beside the chat: 17 options, filterable by direction, ranked 80/20, each with **+ Pick** and **☆ Save**.*
+
 When a turn edits files or digs through research, the **✨ Next** pane opens beside the chat:
 
 - **One line of status**: 💚 done, 🟡 in progress or 🟥 blocked, plus a one-sentence summary.
@@ -49,7 +53,18 @@ When a turn edits files or digs through research, the **✨ Next** pane opens be
   - **Auto**: interviews you only when a pick needs your ideas.
 - **Send it**: **Put in prompt**, **Add to my draft** or **Send now ▶**. **A− / A+** change the text size, and your choices are remembered.
 
-Commands: `/recap` reopens the pane, `/recap again` brews fresh options.
+It also keeps track for you:
+
+- **Never left guessing**: when a turn gets no pane, a short note says why ("nothing was changed, it was just a chat") and that `/recap` makes one anyway.
+- **The latest recap per project**: `/recap` in any chat of the same project shows it straight away; **↻ New options** brews fresh ones for that chat.
+- **A gentle reminder**: open a chat on a project whose last piece of work was left 🟡 or 🟥, and the owl names it with one next step.
+- **A progress diary per project**: each finished recap adds a plain, dated entry (what was done, what was asked, status) you can share with clients. `/recap diary` shows where it is.
+- **A log for debugging**: every attempt, whether it worked and why, in `~/.claude/recap/log.jsonl` (`/recap log`).
+- **A plain warning** if two copies of the mod end up loaded in one chat, instead of failing quietly. turn-status does the same.
+
+Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap diary` and `/recap log` show those files.
+
+What's next for it: a [daily digest across all your projects](docs/daily-digest-sketch.md) (a sketch).
 
 How it works: the options come from a short follow-up question to Claude about the conversation that just happened, so they can point at real code. It costs a little extra per qualifying turn (most of the conversation is served from the prompt cache); if that fails it falls back to the small, fast model.
 
@@ -76,6 +91,14 @@ Each mod is a [Claude Code hooks-module plugin](https://code.claude.com/docs) un
 claude plugin validate plugins/recap
 claude plugin test plugins/recap
 ```
+
+To work on a mod locally, add this folder as a marketplace once (`claude plugin marketplace add <path to this repo>`), install from it, then release changes with:
+
+```
+node scripts/release.mjs recap [patch|minor|major] [--publish]
+```
+
+It bumps the version, validates and tests, commits the release, refreshes the installed copy, prunes old cached copies, and with `--publish` pushes here.
 
 ## License
 
