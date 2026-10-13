@@ -108,7 +108,28 @@ export const promptFor = (log: TurnLog, answer: string): string => {
 
 export type Takes = { tldr: string; verdict: Verdict; verdictWhy: string; options: Option[] }
 
-const str = (x: unknown): string => (typeof x === 'string' ? x.trim() : '')
+/**
+ * Model-written text made safe to show and to send: links and images reduced
+ * to their words, HTML tags dropped, control characters and line breaks turned
+ * into spaces, and capped. The model's text can echo what it read (a web page,
+ * a file), so none of it may carry a hidden instruction or a live link.
+ */
+export const plain = (x: unknown, max = 400): string => {
+  if (typeof x !== 'string') return ''
+  const s = x
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images → their alt words
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → their words
+    .replace(/<[^>]*>/g, ' ') // HTML tags
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ') // control, zero-width and direction marks
+    .replace(/\s+/g, ' ')
+    .trim()
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+/** Plain text escaped for a Markdown element, so nothing in it becomes a link, image or markup. */
+export const md = (s: string): string => s.replace(/[\\`*_{}\[\]()#+\-.!<>|~]/g, c => `\\${c}`)
+
+const str = (x: unknown): string => plain(x)
 const list = (x: unknown): any[] => (Array.isArray(x) ? x : [])
 const VERDICTS = new Set<Verdict>(['done', 'in_progress', 'blocked'])
 const EFFORTS = new Set(['S', 'M', 'L'])
@@ -120,7 +141,7 @@ export const parseTakes = (text: string): Takes | null => {
   if (start < 0 || end <= start) return null
   try {
     const j = JSON.parse(text.slice(start, end + 1))
-    const tldr = str(j.tldr)
+    const tldr = plain(j.tldr, 200)
     if (!tldr || !VERDICTS.has(j.verdict)) return null
     const options: Option[] = list(j.options)
       .map((o, i) => {
@@ -128,19 +149,19 @@ export const parseTakes = (text: string): Takes | null => {
         const impact = Math.min(5, Math.max(1, Math.round(Number(o?.impact) || 3)))
         return {
           id: `o${i}`,
-          title: str(o?.title),
-          detail: str(o?.detail),
+          title: plain(o?.title, 90),
+          detail: plain(o?.detail, 200),
           lanes: lanes.length > 0 ? lanes : (['feature'] as Lane[]),
           impact,
           effort: EFFORTS.has(o?.effort) ? o.effort : 'M',
           needsYou: o?.needs_you === true,
-          prompt: str(o?.prompt),
+          prompt: plain(o?.prompt, 300),
         }
       })
       .filter(o => o.title && o.prompt)
       .slice(0, 24)
     if (options.length === 0) return null
-    return { tldr, verdict: j.verdict, verdictWhy: str(j.verdict_why), options }
+    return { tldr, verdict: j.verdict, verdictWhy: plain(j.verdict_why, 120), options }
   } catch {
     return null
   }
@@ -214,7 +235,15 @@ export const isSaved = (backlog: readonly BacklogItem[], o: Option): boolean =>
 export const toggleSaved = (backlog: readonly BacklogItem[], o: Option, now: number): BacklogItem[] =>
   isSaved(backlog, o)
     ? backlog.filter(b => !(b.title === o.title && b.prompt === o.prompt))
-    : [{ ...o, id: `bk-${now.toString(36)}`, savedAt: now }, ...backlog].slice(0, 100)
+    : [{ ...o, id: freshId(backlog, now), savedAt: now }, ...backlog].slice(0, 100)
+
+/** An id no saved option has yet: two saves in the same millisecond must not share one, or the pane cannot draw. */
+const freshId = (backlog: readonly BacklogItem[], now: number): string => {
+  const taken = new Set(backlog.map(b => b.id))
+  let n = 0
+  while (taken.has(`bk-${now.toString(36)}-${n}`)) n++
+  return `bk-${now.toString(36)}-${n}`
+}
 
 export const DEPLOY: Record<Deploy, { label: string; text: string }> = {
   local: { label: 'Keep it local', text: 'Keep it local for now; do not deploy anything.' },
@@ -307,11 +336,11 @@ export const parseQuestions = (input: unknown): Question[] | null => {
     .map(q => {
       const options = list(q?.options)
         .map(o => (typeof o === 'string'
-          ? { label: o.trim(), hint: '', isRecommended: false }
-          : { label: str(o?.label), hint: str(o?.hint), isRecommended: o?.recommended === true }))
+          ? { label: plain(o, 60), hint: '', isRecommended: false }
+          : { label: plain(o?.label, 60), hint: plain(o?.hint, 120), isRecommended: o?.recommended === true }))
         .filter(o => o.label)
         .slice(0, 6)
-      return { question: str(q?.question), options, isMulti: q?.multi === true }
+      return { question: plain(q?.question, 160), options, isMulti: q?.multi === true }
     })
     .filter(q => q.question && q.options.length >= 2)
     .slice(0, 5)
@@ -346,6 +375,6 @@ export const answersText = (iv: Interview): string => {
       : picked.map(oi => q.options[oi]?.label).filter(Boolean).join(', ')
     return `${i + 1}. ${q.question}\n   → ${said}`
   })
-  const note = iv.note.trim() ? `\n\nAlso: ${iv.note.trim()}` : ''
+  const note = plain(iv.note, 500) ? `\n\nAlso: ${plain(iv.note, 500)}` : ''
   return `My answers:\n\n${lines.join('\n')}${note}\n\nGo ahead, and make every technical decision yourself.`
 }

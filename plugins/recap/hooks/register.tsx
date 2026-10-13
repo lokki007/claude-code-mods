@@ -7,7 +7,7 @@ import type { Takes, TurnLog } from './recap'
 import {
   AUTONOMY, DEPLOY, INTERVIEW_DESCRIPTION, INTERVIEW_SCHEMA, LANES, LANE_KEYS, SYSTEM, answer, answersText,
   bestInLane, composePrompt, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
-  parseQuestions, parseTakes, promptFor, ranked, toggleSaved, topPicks, willInterview,
+  md, parseQuestions, parseTakes, promptFor, ranked, toggleSaved, topPicks, willInterview,
 } from './recap'
 
 const PANE = 'recap'
@@ -194,7 +194,7 @@ export const register: Register = on => {
           ? 'Brewing options…'
           : r.status === 'error'
             ? `Couldn't plan: ${r.error}`
-            : `${VERDICT[r.verdict]} ${r.tldr}`
+            : `${VERDICT[r.verdict]} ${md(r.tldr)}`
     const header = (
       <Box flexDirection="row" alignItems="center" gap={1}>
         {mascot}
@@ -238,7 +238,7 @@ export const register: Register = on => {
           {tabs}
           {iv.questions.map((q, qi) => (
             <Box key={`q${qi}`} flexDirection="column">
-              <Markdown text={`${TITLE_H[prefs.size] || '**'}${qi + 1}. ${q.question}${TITLE_H[prefs.size] ? '' : '**'}`} />
+              <Markdown text={`${TITLE_H[prefs.size] || '**'}${qi + 1}. ${md(q.question)}${TITLE_H[prefs.size] ? '' : '**'}`} />
               <Box flexDirection="row" flexWrap="wrap" gap={1}>
                 {q.options.map((o, oi) => {
                   const isChosen = (iv.answers[qi] ?? []).includes(oi)
@@ -253,7 +253,7 @@ export const register: Register = on => {
                 </Button>
               </Box>
               {q.options.some(o => o.hint)
-                ? <Markdown dimColor text={q.options.filter(o => o.hint).map(o => `**${o.label}**: ${o.hint}`).join(' · ')} />
+                ? <Markdown dimColor text={q.options.filter(o => o.hint).map(o => `**${md(o.label)}**: ${md(o.hint)}`).join(' · ')} />
                 : null}
             </Box>
           ))}
@@ -309,7 +309,10 @@ export const register: Register = on => {
     const composed = composePrompt(pool, picks.chosen, prefs.deploy, prefs.autonomy)
 
     const send = async (how: 'replace' | 'append' | 'submit') => {
-      if (!composed) return
+      if (!composed) {
+        $.ui.toast('Pick at least one option first')
+        return
+      }
       const nextLearned = learnFrom(learned, picked)
       await update($, learnedAtom, () => nextLearned)
       await $.store.set('learned', nextLearned)
@@ -333,10 +336,10 @@ export const register: Register = on => {
     }
     const optionBody = (o: Option, badges: string, extra?: string) => (
       <Box flexDirection="column" flexShrink={1}>
-        <Markdown key={`opt-${o.id}`} text={`${TITLE_H[prefs.size]}${o.title}${badges ? `  ${badges}` : ''}`} />
+        <Markdown key={`opt-${o.id}`} text={`${TITLE_H[prefs.size]}${md(o.title)}${badges ? `  ${badges}` : ''}`} />
         <Markdown
           dimColor
-          text={`${o.lanes.map(l => LANES[l].icon).join('')} ${o.detail} · ${EFFORT[o.effort]} · ${o.needsYou ? '💬 your call' : '🤖 Claude can decide'}${extra ? ` · ${extra}` : ''}`}
+          text={`${o.lanes.map(l => LANES[l].icon).join('')} ${md(o.detail)} · ${EFFORT[o.effort]} · ${o.needsYou ? '💬 your call' : '🤖 Claude can decide'}${extra ? ` · ${extra}` : ''}`}
         />
       </Box>
     )
@@ -464,7 +467,7 @@ export const register: Register = on => {
         </Text>
 
         <Box borderStyle="single" borderDimColor paddingX={1} marginTop={1} flexDirection="column">
-          {composed ? <Markdown text={composed} /> : <Text dimColor>Your prompt builds itself here.</Text>}
+          {composed ? <Text>{composed}</Text> : <Text dimColor>Your prompt builds itself here.</Text>}
         </Box>
         <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={1}>
           <Button key="fill" variant="primary" onPress={() => send('replace')}>Put in prompt</Button>
