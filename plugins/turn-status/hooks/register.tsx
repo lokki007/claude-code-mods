@@ -4,12 +4,35 @@ import type { Register } from 'claude-code'
 import type { Snap } from '../types'
 import { IDLE, LINGER_MS, applyTaskCall, describeTool, plainLine, taskCallOf } from './model'
 import { bandSvg } from './svg'
+import type { Instance } from './copies'
+import { duplicateWarning, otherCopies, registryPath, withInstance } from './copies'
 
 export const snap = atom({ plugin: 'turn-status', key: 'snap' } as const, IDLE)
 
 export const register: Register = on => {
-  on('session.start', ($, e, next) => {
-    $.ui.status(undefined) // drop the line pinned by the first, plain-text version
+  // A second copy of this mod in the same chat: each copy announces itself, then looks for the other.
+  on('session.start', async ($, e, next) => {
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+    if (home) {
+      const me: Instance = { session: await $.session.id(), token: crypto.randomUUID(), root: $.plugin.root, at: await $.clock.now() }
+      const registry = registryPath(home)
+      const announce = async () => {
+        const raw = (await $.fs.exists(registry)) ? String(await $.fs.read(registry)) : '[]'
+        await $.fs.write(registry, JSON.stringify(withInstance(raw, me)))
+      }
+      await announce()
+      // Two copies writing at the same instant can drop each other: write again twice, a little apart.
+      $.clock.after(300 + Math.floor(Math.random() * 300), () => void announce())
+      $.clock.after(900 + Math.floor(Math.random() * 400), () => void announce())
+      $.clock.after(2000, async () => {
+        const raw = (await $.fs.exists(registry)) ? String(await $.fs.read(registry)) : '[]'
+        const others = otherCopies(withInstance(raw, me), me)
+        // Every copy sees the others; the one that started last says so (its check runs last), so the warning shows once.
+        if (others.length > 0 && [me, ...others].sort((a, b) => b.at - a.at || a.token.localeCompare(b.token))[0]!.token === me.token) {
+          $.ui.toast(duplicateWarning(me, others), { timeoutMs: 12000 })
+        }
+      })
+    }
     return next(e)
   })
 
@@ -18,7 +41,7 @@ export const register: Register = on => {
     await update($, snap, s => ({
       ...IDLE,
       tasks: s.tasks ?? [],
-      phase: 'working',
+      phase: 'working' as const,
       turnId: e.turnId,
       startedAt: now,
       actionAt: now,
@@ -53,7 +76,7 @@ export const register: Register = on => {
       await update($, snap, s => ({
         ...IDLE,
         ...s,
-        phase: 'done',
+        phase: 'done' as const,
         action: null,
         durationMs: e.durationMs,
         aborted: e.isAborted,
@@ -61,7 +84,7 @@ export const register: Register = on => {
       }))
       // Then get out of the way, unless another turn has started meanwhile.
       $.clock.after(LINGER_MS, () => {
-        void update($, snap, s => (s.phase === 'done' && s.turnId === e.turnId ? { ...s, phase: 'idle' } : s))
+        void update($, snap, s => (s.phase === 'done' && s.turnId === e.turnId ? { ...s, phase: 'idle' as const } : s))
       })
     }
     return next(e)

@@ -50,7 +50,7 @@ export const describeTool = (e: { tool: string } & Record<string, any>): string 
       return `Editing ${base(e.notebook_path)}`
     case 'Bash':
     case 'PowerShell':
-      return `Running ${clip(String(e.command ?? '').split('\n')[0], 40)}`
+      return `Running ${clip(String(e.command ?? '').split('\n')[0] ?? '', 40)}`
     case 'Grep':
       return `Searching for “${clip(String(e.pattern ?? ''), 28)}”`
     case 'Glob':
@@ -72,7 +72,7 @@ export const describeTool = (e: { tool: string } & Record<string, any>): string 
       return 'Updating the plan'
     default: {
       const mcp = /^mcp__(.+?)__(.+)$/.exec(e.tool)
-      if (mcp) return `Using ${mcp[2].replace(/_/g, ' ')}`
+      if (mcp) return `Using ${(mcp[2] ?? '').replace(/_/g, ' ')}`
       return `Using ${e.tool}`
     }
   }

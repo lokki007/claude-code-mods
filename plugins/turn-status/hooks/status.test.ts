@@ -1,5 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 
+import type { Snap } from '../types'
 import { IDLE, LINGER_MS, applyTaskCall, describeTool, fmtClock, plainLine, words } from './model'
 
 test('tool calls read as plain actions', async () => {
@@ -13,7 +14,7 @@ test('tool calls read as plain actions', async () => {
 })
 
 test('the running task leads, the tool action follows', async () => {
-  let s = { ...IDLE, phase: 'working' as const, action: 'Editing svg.ts', startedAt: 0 }
+  let s: Snap = { ...IDLE, phase: 'working', action: 'Editing svg.ts', startedAt: 0 }
   expect(words(s)).toMatchObject({ headline: 'Editing svg.ts', detail: null, progress: null })
   s = applyTaskCall(s, { tool: 'TodoWrite', todos: [
     { content: 'Read', status: 'completed', activeForm: 'Reading' },
@@ -83,4 +84,27 @@ test('a turn: action while a tool runs, Thinking between, then done and gone', a
   await clock.advance(LINGER_MS + 10)
   const gone = await $.ui.mount({ plugin: 'turn-status', surface: 'vscode', component: 'AbovePrompt', props: ABOVE }).catch(() => null)
   if (gone !== null) expect(await gone.find({ text: /Done/ })).toBeUndefined()
+})
+
+test('a second copy of turn-status in the same chat gets one plain warning', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_760_000_000_000 })
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  const files = new Map<string, string>()
+  const norm = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  on('fs.exists', ($: any, e: any) => ({ value: files.has(norm(e.path)) }) as any)
+  on('fs.read', ($: any, e: any) => ({ value: files.get(norm(e.path)) }) as any)
+  on('fs.write', ($: any, e: any) => { files.set(norm(e.path), e.text); return { value: undefined } as any })
+  on('session.id', () => ({ value: 'chat-1' }) as any)
+  const toasts: string[] = []
+  on('ui.toast', ($: any, e: any) => { toasts.push(e.text); return { value: undefined } as any })
+  on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'G:/q', surface: 'desktop', isInteractive: true })
+  await clock.advance(2500)
+  expect(toasts).toEqual([])
+  // Two copies starting together in one chat.
+  await $.session.start({ cwd: 'G:/q', surface: 'desktop', isInteractive: true })
+  await $.session.start({ cwd: 'G:/q', surface: 'desktop', isInteractive: true })
+  await clock.advance(2500)
+  expect(toasts.filter(t => t.startsWith('⚠ turn-status is loaded twice'))).toHaveLength(1)
+  expect(JSON.parse(files.get('C:/Users/me/.claude/turn-status/instances.json')!)).toHaveLength(3)
 })
