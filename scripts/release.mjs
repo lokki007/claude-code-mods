@@ -141,8 +141,9 @@ if (isDry) {
 }
 
 // 3. Commit the release: every version has history.
-git('add', '-A')
-if (git('status', '--porcelain').trim()) {
+// Only this mod and the listing: another mod's unreleased work stays out of this release.
+git('add', '-A', '--', `plugins/${mod}`, '.claude-plugin/marketplace.json')
+if (git('diff', '--cached', '--name-only').trim()) {
   git('commit', '-q', '-m', `Release ${mod} ${version}`)
   say(`Committed: ${git('log', '-1', '--format=%h %s').trim()}`)
 }
