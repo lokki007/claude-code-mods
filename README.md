@@ -34,7 +34,7 @@ Needs a recent Claude Code (one that supports hooks-module plugins, 2.1.29x or l
 When a turn edits files or digs through research, the **✨ Next** pane opens beside the chat:
 
 - **One line of status**: 💚 done, 🟡 in progress or 🟥 blocked, plus a one-sentence summary.
-- **Many options, not just one**: Claude looks at everything it saw (bugs, loose ends, shortcuts, missed chances) and offers 14–20 next moves across eight directions:
+- **Many options, not just one**: Claude looks at everything it saw (bugs, loose ends, shortcuts, missed chances), thinks about what your customers would value, and offers 28–40 next moves across eight directions:
 
   | | Direction | | Direction |
   |---|---|---|---|
@@ -45,6 +45,7 @@ When a turn edits files or digs through research, the **✨ Next** pane opens be
 
   Each option has a colored bar per direction it serves, a rough size (quick, medium, big), and whether it needs your ideas (💬) or Claude can decide it alone (🤖).
 - **80/20 ranking**: the best value for the effort comes first; moves that help several directions at once rank higher, and the top three wear **⭐ 80/20**. Click a direction to see only its options.
+- **📦 Packages**: the options also come in 3 to 5 ready-made bundles, like "the 2 big ones", a handful of quick wins, or a dozen moves for a bigger push. **Use this package** picks the whole bundle (the prompt names it); **☆ Save for later** sends it to the Saved tab under its name, and every new recap is told what you saved, so it brings back what still matters.
 - **It learns, gently**: after a few prompts it notices which directions you usually pick and nudges them up a little, never hiding the rest. **Reset learning** clears it.
 - **Save for later**: **☆ Save** keeps an option in the **Saved** tab for that project, across chats, so you can pick from it any time (`/recap` opens it).
 - **Build the prompt**: press **+ Pick** on a few options. The first is the main job, the rest ride along. Choose **Where** (keep it local, staging, production) and **Questions**:
