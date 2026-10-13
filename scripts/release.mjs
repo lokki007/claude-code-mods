@@ -1,22 +1,27 @@
 #!/usr/bin/env node
 // Releases one mod from this repository, the single source for the mods:
 //   1. bumps its version (plugin.json and the marketplace listing)
-//   2. validates and tests it with the newest Claude Code on this machine
+//   2. copies in the shared test helpers, then validates and tests it with the newest Claude Code here
 //   3. commits the release, so every version has history
 //   4. refreshes the installed copy (the lokki-mods marketplace points at this folder)
 //   5. keeps only the newest cached copy and checks nothing points at an older one
-//   6. with --publish, pushes to GitHub
+//   6. with --stage, pushes to the staging branch and checks a fresh install from it on GitHub;
+//      with --publish, pushes to the public version (main) instead
 //
 // Usage (from anywhere):
-//   node G:\claude-code-mods\scripts\release.mjs <mod> [patch|minor|major|x.y.z] [--publish] [--dry-run]
+//   node G:\claude-code-mods\scripts\release.mjs <mod> [patch|minor|major|x.y.z] [--stage | --publish] [--dry-run]
+//   node G:\claude-code-mods\scripts\release.mjs promote [--dry-run]
+//       moves what is on staging to the public version, then checks a fresh install from GitHub
 //
 // If validation or a test fails, nothing is committed or installed and the version bump is undone.
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { syncShared } from './sync-shared.mjs'
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MARKET_FILE = join(REPO, '.claude-plugin', 'marketplace.json')
@@ -36,12 +41,7 @@ const fail = msg => {
 }
 const readJson = p => JSON.parse(readFileSync(p, 'utf8'))
 const writeJson = (p, v) => writeFileSync(p, `${JSON.stringify(v, null, 2)}\n`)
-const git = (...cmd) => execFileSync('git', ['-C', REPO, ...cmd], { encoding: 'utf8' })
-
-if (!mod) fail('Which mod? Usage: node scripts/release.mjs <mod> [patch|minor|major|x.y.z] [--publish]')
-const modDir = join(REPO, 'plugins', mod)
-const manifestPath = join(modDir, '.claude-plugin', 'plugin.json')
-if (!existsSync(manifestPath)) fail(`No mod "${mod}" in ${join(REPO, 'plugins')}`)
+const git = (...cmd) => execFileSync('git', ['-C', REPO, ...cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const MARKETPLACE = readJson(MARKET_FILE).name
 const CACHE_DIR = join(homedir(), '.claude', 'plugins', 'cache', MARKETPLACE)
 
@@ -88,6 +88,97 @@ const sameFiles = (a, b) => {
   const y = snapshot(b)
   return x.size === y.size && [...x].every(([k, v]) => y.get(k) === v)
 }
+const hasTests = dir => [...snapshot(dir).keys()].some(k => /\.test\.tsx?$/.test(k))
+/** Runs a mod's tests; returns the summary line, or fails with the end of the output. */
+const runTests = (dir, label) => {
+  let out = ''
+  try {
+    out = claude('plugin', 'test', dir)
+  } catch (err) {
+    out = String(err?.stdout ?? '') + String(err?.stderr ?? '')
+  }
+  if (!/\b0 fail\b/.test(out)) fail(`${label} fails its tests:\n${out.trim().split('\n').slice(-25).join('\n')}`)
+  return out.trim().split('\n').slice(-3, -1).join(', ')
+}
+
+/** owner/repo of the GitHub remote. */
+const githubRepo = () => {
+  const url = git('remote', 'get-url', 'origin').trim()
+  const m = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/)
+  if (!m) fail(`origin is not a GitHub repository: ${url}`)
+  return m[1]
+}
+
+/**
+ * Installs mods fresh from GitHub (at `ref`, or the default branch) in a
+ * throwaway Claude config, the way a new user would, and runs each one's tests
+ * there. `want` maps each mod to the version that must arrive.
+ */
+const verifyFromGitHub = (ref, want) => {
+  const source = `${githubRepo()}${ref ? `#${ref}` : ''}`
+  const config = mkdtempSync(join(tmpdir(), 'mods-verify-'))
+  const isolated = (...cmd) =>
+    execFileSync(CLAUDE, cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CLAUDE_CONFIG_DIR: config } })
+  try {
+    say(`Fresh install from GitHub: ${source}`)
+    isolated('plugin', 'marketplace', 'add', source)
+    for (const [name, version] of Object.entries(want)) {
+      isolated('plugin', 'install', `${name}@${MARKETPLACE}`)
+      const base = join(config, 'plugins', 'cache', MARKETPLACE, name)
+      const dir = join(base, version)
+      if (!existsSync(dir)) fail(`GitHub (${source}) did not hand over ${name} ${version}; it has ${existsSync(base) ? readdirSync(base).join(', ') : 'nothing'}`)
+      say(`  ${name} ${version} from GitHub: ${hasTests(dir) ? runTests(dir, `${name} ${version} from GitHub`) : 'installed'}`)
+    }
+  } finally {
+    rmSync(config, { recursive: true, force: true })
+  }
+}
+
+/** The version of every mod listed in the marketplace file at a git ref. */
+const versionsAt = ref =>
+  Object.fromEntries(JSON.parse(git('show', `${ref}:.claude-plugin/marketplace.json`)).plugins.map(p => [p.name, p.version]))
+
+// ---- promote: staging becomes the public version ------------------------------------------
+
+if (mod === 'promote') {
+  git('fetch', '-q', 'origin')
+  try {
+    git('rev-parse', '--verify', '-q', 'origin/staging')
+  } catch {
+    fail('There is no staging branch on GitHub yet: release a mod with --stage first')
+  }
+  try {
+    git('merge-base', '--is-ancestor', 'origin/main', 'origin/staging')
+  } catch {
+    fail('The public version has changes that staging does not; bring staging up to date first')
+  }
+  const want = versionsAt('origin/staging')
+  const was = versionsAt('origin/main')
+  for (const [name, v] of Object.entries(want)) say(`${name}: ${was[name] ?? 'new'} → ${v}`)
+  if (isDry) {
+    say('Dry run: stopping before the public version changes')
+    process.exit(0)
+  }
+  git('push', '-q', 'origin', 'origin/staging:refs/heads/main')
+  say('The public version now matches staging')
+  // Bring the local main along when it can move straight forward.
+  try {
+    git('merge', '-q', '--ff-only', 'origin/main')
+  } catch {
+    say('Local main has other work, so it was left as it is')
+  }
+  verifyFromGitHub('', want)
+  console.log('✔ Promoted: a fresh install from GitHub gets the staging versions and passes their tests.')
+  process.exit(0)
+}
+
+// ---- release one mod ----------------------------------------------------------------------
+
+if (!mod) fail('Which mod? Usage: node scripts/release.mjs <mod> [patch|minor|major|x.y.z] [--stage | --publish], or: promote')
+if (flag('stage') && flag('publish')) fail('Choose one: --stage (the staging branch) or --publish (the public version)')
+const modDir = join(REPO, 'plugins', mod)
+const manifestPath = join(modDir, '.claude-plugin', 'plugin.json')
+if (!existsSync(manifestPath)) fail(`No mod "${mod}" in ${join(REPO, 'plugins')}`)
 
 const bump = (version, how) => {
   if (/^\d+\.\d+\.\d+$/.test(how)) return how
@@ -117,13 +208,14 @@ if (!isDry) {
   writeJson(MARKET_FILE, market)
 }
 
-// 2. Validate and test with the newest Claude Code.
+// 2. The shared test helpers travel with each mod; then validate and test with the newest Claude Code.
+const synced = syncShared(mod, { check: isDry })
+if (synced.length > 0) say(`${isDry ? 'Would sync' : 'Synced'} shared helpers: ${synced.join(', ')}`)
 say(`Checking with ${CLAUDE}`)
 try {
   const validated = claude('plugin', 'validate', modDir)
   if (!/Validation passed/.test(validated)) throw new Error(validated)
-  const hasTests = [...snapshot(modDir).keys()].some(k => /\.test\.tsx?$/.test(k))
-  if (hasTests) {
+  if (hasTests(modDir)) {
     const tested = claude('plugin', 'test', modDir)
     if (!/\b0 fail\b/.test(tested)) throw new Error(tested)
     say(`Tests: ${tested.trim().split('\n').slice(-3).join(' ')}`)
@@ -168,10 +260,15 @@ const record = (readJson(INSTALLED).plugins ?? readJson(INSTALLED))[key]
 const paths = (Array.isArray(record) ? record : [record]).map(r => r?.installPath)
 if (!paths.every(p => p && existsSync(p) && p.endsWith(version))) fail(`installed_plugins.json still points at ${paths.join(', ')}`)
 
-// 6. Publish.
+// 6. Stage or publish.
+if (flag('stage')) {
+  git('push', '-q', '-f', 'origin', 'HEAD:refs/heads/staging')
+  say('Pushed to the staging branch')
+  verifyFromGitHub('staging', { [mod]: version })
+}
 if (flag('publish')) {
   git('push', '-q')
   say(`Pushed to ${git('remote', 'get-url', 'origin').trim()}`)
 }
 
-console.log(`✔ ${mod} ${version} released. Restart chats (or run /reload-plugins) to load it.`)
+console.log(`✔ ${mod} ${version} released${flag('stage') ? ' to staging' : flag('publish') ? ' publicly' : ''}. Restart chats (or run /reload-plugins) to load it.`)

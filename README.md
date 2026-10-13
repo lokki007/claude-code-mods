@@ -4,7 +4,7 @@ Two small mods for [Claude Code](https://claude.com/claude-code) that make it ea
 
 | Mod | What you get |
 | --- | --- |
-| **recap** | After Claude finishes a real piece of work, a side pane lists 14–20 possible next moves, color-coded by direction and ranked 80/20. Pick a few and it writes your next prompt for you. |
+| **recap** | After Claude finishes a real piece of work, a side pane lists 28–40 possible next moves, color-coded by direction and ranked 80/20. Pick a few and it writes your next prompt for you. It also writes plain progress notes and a progress page for your clients. |
 | **turn-status** | A quiet one-line band above the prompt while Claude works: what it is doing right now, how long it has been going, task progress and failures. It hides itself when Claude is idle. |
 
 ## Install
@@ -35,6 +35,9 @@ When a turn edits files or digs through research, the **✨ Next** pane opens be
 
 - **One line of status**: 💚 done, 🟡 in progress or 🟥 blocked, plus a one-sentence summary.
 - **✉ Explain to client**: a short, jargon-free note about the latest work (what changed, status, what is next), with a **Copy** button for your email or chat.
+  - Choose the tone: **Friendly**, **Formal** or **Very short**, remembered per project.
+  - Add the client's name and your sign-off once per project. The note greets them and signs off for you, and the progress page uses the name too.
+  - **🧸 Even simpler** rewrites the note so anyone could follow it; press it again for the normal version.
 - **Many options, not just one**: Claude looks at everything it saw (bugs, loose ends, shortcuts, missed chances), thinks about what your customers would value, and offers 28–40 next moves across eight directions:
 
   | | Direction | | Direction |
@@ -46,7 +49,6 @@ When a turn edits files or digs through research, the **✨ Next** pane opens be
 
   Each option has a colored bar per direction it serves, a rough size (quick, medium, big), and whether it needs your ideas (💬) or Claude can decide it alone (🤖).
 - **80/20 ranking**: the best value for the effort comes first; moves that help several directions at once rank higher, and the top three wear **⭐ 80/20**. Click a direction to see only its options.
-- **📦 Packages**: the options also come in 3 to 5 ready-made bundles, like "the 2 big ones", a handful of quick wins, or a dozen moves for a bigger push. Each shows a rough size from its options (⚡ quick, ⏱ about an hour, ⏱ a few hours, 📅 about a day, 📅 a few days). **Use this package** picks the whole bundle (the prompt names it); **☆ Save for later** sends it to the Saved tab under its name, and every new recap is told what you saved, so it brings back what still matters.
 - **Borrowed ideas**: ideas you picked and ran in your other projects are offered again where they fit, marked **↪ borrowed from** that project.
 - **It learns, gently**: after a few prompts it notices which directions you usually pick and nudges them up a little, never hiding the rest. **Reset learning** clears it.
 - **Save for later**: **☆ Save** keeps an option in the **Saved** tab for that project, across chats, so you can pick from it any time (`/recap` opens it).
@@ -61,11 +63,13 @@ It also keeps track for you:
 - **Never left guessing**: when a turn gets no pane, a short note says why ("nothing was changed, it was just a chat") and that `/recap` makes one anyway.
 - **The latest recap per project**: `/recap` in any chat of the same project shows it straight away; **↻ New options** brews fresh ones for that chat.
 - **A gentle reminder**: open a chat on a project whose last piece of work was left 🟡 or 🟥, and the owl names it with one next step.
-- **A progress diary per project**: each finished recap adds a dated update written for clients: the outcome in plain words, the status and what comes next, with no file names or technical terms. `/recap diary` shows where it is.
+- **A progress diary per project**: each finished recap adds a dated update written for clients: the outcome in plain words, the status and what comes next. File names and technical terms are taken out, and what is left still reads as a normal sentence.
+- **A progress page to share**: the diary is also kept as a clean, private web page, updated with every new entry. Send the file to your client; it has no tracking and no outside links.
+- **A calm owl**: after two or three finished pieces of work in a row it wears a small medal; after four or more it quietly glows.
 - **A log for debugging**: every attempt, whether it worked and why, in `~/.claude/recap/log.jsonl` (`/recap log`).
 - **A plain warning** if two copies of the mod end up loaded in one chat, instead of failing quietly. turn-status does the same.
 
-Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap diary` and `/recap log` show those files. Newer Claude versions have a built-in `/recap`; there the same commands start with `/next` instead (`/next`, `/next again`, and so on), and the mod tells you once.
+Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap diary` and `/recap page` show the progress updates (`page` is the web page), `/recap client Name` and `/recap signoff Name` set them for the project (handy on the phone, where the pane has no text box), and `/recap log` shows the debug log. Newer Claude versions have a built-in `/recap`. There, every one of these starts with `/next` instead, the mod tells you once, and every message it shows names the command that works. Runs with no screen (`claude -p`, scripts) get no recap, so they stay fast; `RECAP_HEADLESS=1` turns it back on.
 
 What's next for it: a [daily digest across all your projects](docs/daily-digest-sketch.md) (a sketch).
 
@@ -98,10 +102,21 @@ claude plugin test plugins/recap
 To work on a mod locally, add this folder as a marketplace once (`claude plugin marketplace add <path to this repo>`), install from it, then release changes with:
 
 ```
-node scripts/release.mjs recap [patch|minor|major] [--publish]
+node scripts/release.mjs recap [patch|minor|major] [--stage | --publish]
+node scripts/release.mjs promote
 ```
 
-It bumps the version, validates and tests, commits the release, refreshes the installed copy, prunes old cached copies, and with `--publish` pushes here.
+It bumps the version, copies in the shared test helpers (`shared/`), validates and tests, commits the release, refreshes the installed copy and prunes old cached copies.
+
+- `--stage` pushes to the `staging` branch and checks a fresh install from it on GitHub.
+- `promote` moves staging to the public version and checks a fresh install again.
+- `--publish` pushes straight to the public version.
+
+Other scripts:
+
+- `node scripts/nightly-check.mjs` runs a short headless chat with both mods and checks their logs. `--install` runs it every night at 3am and pops up a Windows notification if anything failed.
+- `node scripts/demo-gif.mjs <folder of screenshots>` makes the README demo GIF.
+- `node scripts/sync-shared.mjs` copies the shared test helpers into each mod.
 
 ## License
 
