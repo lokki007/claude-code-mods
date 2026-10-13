@@ -3,6 +3,11 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Picks, Prefs, Recap, View } from '../types'
 import { owlSvg } from './owl'
+import type { Instance, ProjectLast } from './journal'
+import {
+  appendLine, dataDir, diaryEntry, diaryFile, diaryHeader, duplicateWarning, otherCopies, projectKey, reminderFor,
+  skipReason, withInstance,
+} from './journal'
 import type { HistoryRow, Takes, TurnLog } from './recap'
 import {
   AUTONOMY, DEPLOY, INTERVIEW_DESCRIPTION, INTERVIEW_SCHEMA, LANES, LANE_KEYS, SYSTEM, answer, answersText,
@@ -24,6 +29,7 @@ const backlogAtom = atom({ plugin: 'recap', key: 'backlog' } as const, [])
 const learnedAtom = atom({ plugin: 'recap', key: 'learned' } as const, {})
 const interviewAtom = atom({ plugin: 'recap', key: 'interview' } as const, null)
 const viewAtom = atom({ plugin: 'recap', key: 'view' } as const, 'options')
+const warningAtom = atom({ plugin: 'recap', key: 'warning' } as const, null)
 
 const EMPTY_LOG: TurnLog = { ask: '', steps: [], edits: 0, research: 0, tools: 0 }
 const VERDICT = { done: '💚', in_progress: '🟡', blocked: '🟥' } as const
@@ -38,6 +44,40 @@ const backlogKey = (cwd: string) => `backlog:${cwd.replace(/\\/g, '/').replace(/
 
 const freshPicks = (turnId: string): Picks => ({ turnId, chosen: [], lane: 'all' })
 
+/** This chat's paths and project, filled in at session start. */
+const here = { dir: '', cwd: '', project: '' }
+
+/** Appends one line to the debug log: every recap attempt, whether it worked, and why. Never throws. */
+async function note($: EngineInterface, event: string, detail: Record<string, unknown> = {}) {
+  if (!here.dir) return
+  try {
+    const path = `${here.dir}/log.jsonl`
+    const existing = (await $.fs.exists(path)) ? String(await $.fs.read(path)) : ''
+    const line = JSON.stringify({ at: new Date(await $.clock.now()).toISOString(), project: here.project, event, ...detail })
+    await $.fs.write(path, appendLine(existing, line))
+  } catch {
+    // The log is a debugging aid; losing a line must never break the recap.
+  }
+}
+
+/** Keeps a ready recap: as the project's latest (for /recap in any chat) and as a diary entry. */
+async function keep($: EngineInterface, r: Recap) {
+  if (!here.project) return
+  const at = await $.clock.now()
+  await $.store.set(`last:${here.project}`, { recap: { ...r, origin: undefined }, at } satisfies ProjectLast)
+  // One diary entry per finished piece of work: a fresh take on the same turn does not add another.
+  const seenKey = `diary-turn:${here.project}`
+  if ((await $.store.get(seenKey)) === r.turnId) return
+  await $.store.set(seenKey, r.turnId)
+  try {
+    const path = diaryFile(here.dir, here.cwd)
+    const existing = (await $.fs.exists(path)) ? String(await $.fs.read(path)) : diaryHeader(here.cwd)
+    await $.fs.write(path, existing + diaryEntry(r, at))
+  } catch (err) {
+    await note($, 'diary-failed', { why: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 /**
  * Asks for the recap. A fork reads the real conversation (code, decisions), so
  * the options can be specific to what was seen; if there is nothing to fork or
@@ -49,10 +89,13 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
   }) satisfies Recap)
   let takes: Takes | null = null
   let why = ''
+  let source = 'conversation'
   try {
     const forked = await $.model.fork({ prompt: forkPrompt(answerText) })
     takes = forked.isAnswered ? parseTakes(forked.text) : null
     if (takes === null) {
+      source = 'history fallback'
+      await note($, 'fork-skipped', { turnId, why: forked.isAnswered ? 'reply was not readable' : forked.reason })
       // The fork could not answer. Without a recorded turn (a /recap right after the mod loaded) the
       // small model would know nothing, so give it the chat's real history instead.
       let digest = { log: turnLog, answer: answerText }
@@ -76,7 +119,9 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
     ready = { ...r, status: 'ready' as const, ...takes }
     return ready
   })
+  await note($, ready === null ? 'recap-failed' : 'recap-ready', ready === null ? { turnId, why } : { turnId, source, options: (ready as Recap).options.length })
   if (ready !== null) {
+    await keep($, ready)
     const fresh = freshPicks(turnId)
     await update($, picksAtom, () => fresh)
     await update($, viewAtom, v => (v === 'interview' ? v : 'options'))
@@ -91,7 +136,7 @@ export const register: Register = on => {
   let storeKey = backlogKey('')
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'recap', description: 'Show the next-prompt pane; "/recap again" brews new options' })
+    await $.command.register({ name: 'recap', description: 'Show the next-prompt pane; "/recap again" brews new options, "/recap diary" and "/recap log" show those files' })
     await $.tool.register({ name: 'interview', description: INTERVIEW_DESCRIPTION, inputSchema: INTERVIEW_SCHEMA, isDeferred: false })
     storeKey = backlogKey(await $.session.cwd())
     const prefs = (await $.store.get('prefs')) as Partial<Prefs> | undefined
@@ -100,6 +145,48 @@ export const register: Register = on => {
     if (learned) await update($, learnedAtom, () => learned)
     const backlog = (await $.store.get(storeKey)) as BacklogItem[] | undefined
     if (Array.isArray(backlog)) await update($, backlogAtom, () => backlog)
+
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''
+    here.cwd = await $.session.cwd()
+    here.project = projectKey(here.cwd)
+    here.dir = home ? dataDir(home) : ''
+    await update($, warningAtom, () => null)
+    await note($, 'session-start', { root: $.plugin.root })
+
+    // A second copy of this mod in the same chat: each copy announces itself, then looks for the other.
+    if (here.dir) {
+      const me: Instance = { session: await $.session.id(), token: crypto.randomUUID(), root: $.plugin.root, at: await $.clock.now() }
+      const registry = `${here.dir}/instances.json`
+      const announce = async () => {
+        const raw = (await $.fs.exists(registry)) ? String(await $.fs.read(registry)) : '[]'
+        await $.fs.write(registry, JSON.stringify(withInstance(raw, me)))
+      }
+      await announce()
+      // Two copies writing at the same instant can drop each other: write again twice, a little apart.
+      $.clock.after(300 + Math.floor(Math.random() * 300), () => void announce())
+      $.clock.after(900 + Math.floor(Math.random() * 400), () => void announce())
+      $.clock.after(2000, async () => {
+        const raw = (await $.fs.exists(registry)) ? String(await $.fs.read(registry)) : '[]'
+        const others = otherCopies(withInstance(raw, me), me)
+        if (others.length === 0) return
+        const warning = duplicateWarning('recap', me, others)
+        await update($, warningAtom, () => warning)
+        await note($, 'duplicate-copy', { roots: [me.root, ...others.map(o => o.root)] })
+        // Every copy sees the others; the one that started last says so (its check runs last), so the warning shows once.
+        if ([me, ...others].sort((a, b) => b.at - a.at || a.token.localeCompare(b.token))[0]!.token === me.token) {
+          $.ui.toast(warning, { timeoutMs: 12000 })
+        }
+      })
+    }
+
+    // Unfinished work from an earlier chat in this project: one gentle nudge with one next step.
+    const last = (await $.store.get(`last:${here.project}`)) as ProjectLast | undefined
+    const top = last && Array.isArray(last.recap?.options) ? ranked(last.recap.options, await read($, learnedAtom))[0] : undefined
+    const nudge = reminderFor(last, await $.clock.now(), top?.title)
+    if (nudge) {
+      $.ui.toast(nudge, { timeoutMs: 10000 })
+      await note($, 'reminder', { tldr: last!.recap.tldr })
+    }
     return next(e)
   })
 
@@ -136,6 +223,11 @@ export const register: Register = on => {
       void $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS })
       // Brew after the turn has handed control back, so the prompt is never held up.
       $.clock.after(0, () => void brew($, job.turnId, job.log, job.answer))
+      await note($, 'turn-recapped', { turnId: e.turnId, edits: log.edits, research: log.research, tools: log.tools })
+    } else if (e.agentId === undefined) {
+      const why = skipReason(log, e.answer, e.isAborted) ?? 'it did not qualify'
+      $.ui.toast(`No recap this time: ${why}. /recap makes one anyway.`, { timeoutMs: 5000 })
+      await note($, 'turn-skipped', { turnId: e.turnId, why, edits: log.edits, research: log.research, tools: log.tools })
     }
     return next(e)
   })
@@ -144,9 +236,28 @@ export const register: Register = on => {
     const job = await read($, lastJob)
     const backlog = await read($, backlogAtom)
     await $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS, focus: true })
-    const hasRecap = (await read($, current)) !== null
+    const arg = e.args.trim()
+    if (arg === 'diary') {
+      const path = diaryFile(here.dir, here.cwd)
+      return { text: (await $.fs.exists(path)) ? `This project's progress log: ${path}` : 'No diary entries yet: one is added each time a recap finishes.' }
+    }
+    if (arg === 'log') return { text: `The recap log: ${here.dir}/log.jsonl` }
+    let hasRecap = (await read($, current)) !== null
+    // No recap in this chat yet, but the project has one from an earlier chat: show it straight away.
+    if (!hasRecap && arg !== 'again') {
+      const last = (await $.store.get(`last:${here.project}`)) as ProjectLast | undefined
+      if (last && Array.isArray(last.recap?.options)) {
+        const earlier: Recap = { ...last.recap, origin: 'earlier' }
+        await update($, current, () => earlier)
+        await update($, picksAtom, () => freshPicks(earlier.turnId))
+        await update($, viewAtom, () => 'options')
+        await note($, 'shown-earlier', { turnId: earlier.turnId })
+        hasRecap = true
+        return { text: 'Showing this project\'s latest recap. ↻ New options brews fresh ones for this chat.' }
+      }
+    }
     // No recap yet (the last turn was small, or the chat began before the mod loaded): recap the chat as it stands.
-    if (e.args.trim() === 'again' || !hasRecap) {
+    if (arg === 'again' || !hasRecap) {
       const now = await $.clock.now()
       const target: Job = job ?? { turnId: `manual-${now.toString(36)}`, log: { ...EMPTY_LOG, ask: 'this conversation so far' }, answer: '' }
       if (job === null) await update($, lastJob, () => target)
@@ -160,15 +271,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const saved = await read($, current)
-    // A recap saved by an older version lacks the options.
-    const isStale = saved !== null && saved.status === 'ready' && !Array.isArray(saved.options)
-    const r: Recap | null = saved === null ? null : isStale
-      ? { ...saved, status: 'error', error: 'this one is from the old version; the next piece of work brings the new pane', options: [] }
-      : saved
+    // Anything malformed in state (it should not happen) shows as no recap rather than breaking the pane.
+    const r: Recap | null = saved !== null && Array.isArray(saved.options) ? saved : null
     const prefs: Prefs = { ...DEFAULT_PREFS, ...(await read($, prefsAtom)) }
     const backlog = await read($, backlogAtom)
     const learned = await read($, learnedAtom)
     const iv = await read($, interviewAtom)
+    const warning = await read($, warningAtom)
     const hasInterview = iv !== null && iv.status === 'open'
     const hasOptions = r !== null && r.status === 'ready'
     let view: View = await read($, viewAtom)
@@ -204,7 +313,7 @@ export const register: Register = on => {
           ? 'Brewing options…'
           : r.status === 'error'
             ? `Couldn't plan: ${r.error}`
-            : `${VERDICT[r.verdict]} ${md(r.tldr)}`
+            : `${VERDICT[r.verdict]} ${md(r.tldr)}${r.origin === 'earlier' ? ' _(from an earlier chat)_' : ''}`
     const header = (
       <Box flexDirection="row" alignItems="center" gap={1}>
         {mascot}
@@ -216,8 +325,10 @@ export const register: Register = on => {
         {r !== null && r.status !== 'brewing'
           ? (
             <Button key="again" variant="secondary" onPress={async () => {
-              const job = await read($, lastJob)
-              if (job !== null) $.clock.after(0, () => void brew($, job.turnId, job.log, job.answer))
+              // No turn recorded in this chat (say, a recap from an earlier chat): recap this chat as it stands.
+              const job = (await read($, lastJob))
+                ?? { turnId: `manual-${(await $.clock.now()).toString(36)}`, log: { ...EMPTY_LOG, ask: 'this conversation so far' }, answer: '' }
+              $.clock.after(0, () => void brew($, job.turnId, job.log, job.answer))
             }}>
               ↻ New options
             </Button>
@@ -225,6 +336,9 @@ export const register: Register = on => {
           : null}
       </Box>
     )
+    const warned = warning
+      ? <Box flexDirection="column">{header}<Text color="#E5A84D">{warning}</Text></Box>
+      : header
 
     const tabs = (
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
@@ -244,7 +358,7 @@ export const register: Register = on => {
       const answered = iv.answers.filter(a => a.length > 0).length
       return (
         <Box flexDirection="column" gap={1} paddingX={isDesktop ? 1 : 0}>
-          {header}
+          {warned}
           {tabs}
           {iv.questions.map((q, qi) => (
             <Box key={`q${qi}`} flexDirection="column">
@@ -295,7 +409,7 @@ export const register: Register = on => {
     }
 
     if (!hasOptions && backlog.length === 0) {
-      return <Box flexDirection="column" gap={1} paddingX={isDesktop ? 1 : 0}>{header}{r === null ? null : tabs}</Box>
+      return <Box flexDirection="column" gap={1} paddingX={isDesktop ? 1 : 0}>{warned}{r === null ? null : tabs}</Box>
     }
 
     // ---- picking: options or the saved backlog, then the builder ---------------------------
@@ -493,7 +607,7 @@ export const register: Register = on => {
     const isWide = e.props.bodyColumns >= 120
     return (
       <Box flexDirection="column" gap={1} paddingX={isDesktop ? 1 : 0}>
-        {header}
+        {warned}
         {tabs}
         <Box flexDirection={isWide ? 'row' : 'column'} gap={2}>
           <Box flexDirection="column" gap={1} width={isWide ? '60%' : '100%'}>{listing}</Box>

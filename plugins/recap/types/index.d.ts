@@ -31,6 +31,8 @@ export type Recap = {
   verdictWhy: string
   options: Option[]
   error: string
+  /** set when /recap shows the project's latest recap from an earlier chat */
+  origin?: 'earlier'
 }
 
 /** An option saved for later, kept per project across chats. */
@@ -89,6 +91,8 @@ declare module 'claude-code' {
       learned: Learned
       interview: Interview | null
       view: View
+      /** a plain warning for the pane header, such as a second copy of the mod */
+      warning: string | null
     }
   }
 }

@@ -5,6 +5,7 @@ import {
   parseQuestions, parseTakes, ranked, score, toggleSaved, topPicks,
 } from './recap'
 import type { Option } from '../types'
+import { diaryEntry, diaryFile, otherCopies, reminderFor, skipReason, withInstance } from './journal'
 
 const OPTIONS = [
   { title: 'Fix the migration conflict', detail: 'It blocks the merge.', lanes: ['fix', 'ship'], impact: 5, effort: 'S', needs_you: false, prompt: 'Merge the two migrations into one and rerun the checks' },
@@ -124,9 +125,23 @@ const PANE = (bodyColumns: number) =>
 const pick = (id: string) => ({ key: `pick-${id}` })
 
 /** A session the way the engine runs one, with the outside world answered and recorded. */
-const world = (on: any, takes: unknown = TAKES) => {
+/** An in-memory file system, so the log, diary and copy check can be read back. */
+const memoryFs = (on: any) => {
+  const files = new Map<string, string>()
+  // The engine hands paths over in the platform's own form (backslashes on Windows).
+  const norm = (p: string) => p.split(String.fromCharCode(92)).join('/')
+  on('fs.exists', ($: any, e: any) => ({ value: files.has(norm(e.path)) }) as any)
+  on('fs.read', ($: any, e: any) => (files.has(norm(e.path)) ? { value: files.get(norm(e.path)) } : { deny: 'ENOENT' }) as any)
+  on('fs.write', ($: any, e: any) => { files.set(norm(e.path), e.text); return { value: undefined } as any })
+  return files
+}
+
+const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> = {}, session = 'chat-1') => {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
-  mock.store(on)
+  mock.store(on, store)
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  const files = memoryFs(on)
+  on('session.id', () => ({ value: session }) as any)
   const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[] }
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: 'G:\\quotes' }) as any)
@@ -145,7 +160,7 @@ const world = (on: any, takes: unknown = TAKES) => {
   on('model.fork', () => (takes === null
     ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
     : { value: { isAnswered: true, text: JSON.stringify(takes), usage: {} } }) as any)
-  return { clock, seen }
+  return { clock, seen, files }
 }
 
 const workTurn = async ($: any, clock: any, turnId = 't1') => {
@@ -412,4 +427,90 @@ test('when the fork cannot answer, the small model gets the real chat history, n
   expect(asked).toContain('booking button')
   expect(asked).toContain('Edit index.html')
   expect(asked).toContain('not live yet')
+})
+
+const LOG = 'C:/Users/me/.claude/recap/log.jsonl'
+const logEvents = (files: Map<string, string>) =>
+  (files.get(LOG) ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
+
+test('journal helpers: skip reasons, diary entries, reminders, copy check', async () => {
+  const empty = { ask: 'hi', steps: [], edits: 0, research: 0, tools: 0 }
+  expect(skipReason(empty, 'hello', false)).toBe('nothing was changed, it was just a chat')
+  expect(skipReason({ ...empty, tools: 2 }, 'ok', false)).toBe('too little was changed or looked up')
+  expect(skipReason({ ...empty, edits: 1, tools: 1 }, 'ok', false)).toBeNull()
+  expect(skipReason({ ...empty, edits: 1 }, 'ok', true)).toBe('the turn was interrupted')
+  expect(diaryFile('C:/Users/me/.claude/recap', 'G:/Quotes App')).toMatch(/^C:\/Users\/me\/\.claude\/recap\/diary\/quotes-app-[a-z0-9]+\.md$/)
+
+  const r = { ...parseTakes(JSON.stringify(TAKES))!, status: 'ready' as const, turnId: 't1', ask: 'move the fixes to main', error: '' }
+  expect(diaryEntry(r, Date.UTC(2026, 9, 13, 9, 5))).toBe(
+    '\n## 2026-10-13 09:05 UTC\n\n- **What was done:** Moved the fixes onto main; one conflict left.\n- **Asked for:** move the fixes to main\n- **Status:** In progress (Conflict blocks merge.)\n')
+
+  const now = Date.UTC(2026, 9, 13)
+  expect(reminderFor({ recap: r, at: now - 86_400_000 }, now, 'Fix the conflict')).toBe(
+    '🦉 yesterday here: "Moved the fixes onto main; one conflict left." was left in progress. Next step: Fix the conflict. /recap shows it.')
+  expect(reminderFor({ recap: { ...r, verdict: 'done' }, at: now }, now)).toBeNull()
+  expect(reminderFor({ recap: r, at: now - 20 * 86_400_000 }, now)).toBeNull()
+
+  const a = { session: 's', token: 'a', root: '/one', at: 1000 }
+  const b = { session: 's', token: 'b', root: '/two', at: 1500 }
+  const list = withInstance(JSON.stringify([b, { session: 'other', token: 'c', root: '/x', at: 1200 }]), a)
+  expect(otherCopies(list, a).map(i => i.token)).toEqual(['b'])
+  expect(otherCopies(withInstance(JSON.stringify([{ ...b, at: 90_000 }]), a), a)).toEqual([])
+  expect(withInstance('not json', a)).toEqual([a])
+})
+
+test('a turn with no recap says why, and every attempt lands in the log', async ($, on) => {
+  const { clock, seen, files } = world(on)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'hello there', turnId: 'chat1' })
+  await $.turn.complete({ answer: 'Hi! How can I help?', durationMs: 900, isAborted: false, turnId: 'chat1', reason: 'answer' } as any)
+  expect(seen.toasts).toEqual(['No recap this time: nothing was changed, it was just a chat. /recap makes one anyway.'])
+  expect(seen.opened).toEqual([])
+
+  await workTurn($, clock, 't2')
+  const events = logEvents(files).map(e => e.event)
+  expect(events).toEqual(['session-start', 'turn-skipped', 'turn-recapped', 'recap-ready'])
+  expect(logEvents(files)[1]).toMatchObject({ why: 'nothing was changed, it was just a chat', project: 'g:/quotes' })
+  expect(logEvents(files)[3]).toMatchObject({ turnId: 't2', source: 'conversation', options: 7 })
+})
+
+test('each finished recap adds one diary entry, once per piece of work', async ($, on) => {
+  const { clock, files } = world(on)
+  on('command.run', () => ({ text: '' }) as any)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await workTurn($, clock, 't1')
+  const diaryPath = [...files.keys()].find(k => k.includes('/diary/'))!
+  expect(files.get(diaryPath)).toContain('# quotes: progress log')
+  expect(files.get(diaryPath)).toContain('- **What was done:** Moved the fixes onto main; one conflict left.')
+  // A fresh take on the same turn does not add a second entry.
+  await ($ as any).command.run({ command: 'recap', args: 'again' })
+  await clock.settle()
+  expect(files.get(diaryPath)!.match(/## /g)).toHaveLength(1)
+  expect(String((await ($ as any).command.run({ command: 'recap', args: 'diary' }))?.text)).toContain(diaryPath)
+})
+
+test('a new chat on an unfinished project gets one gentle nudge, and /recap shows the latest at once', async ($, on) => {
+  const earlier = { ...parseTakes(JSON.stringify(TAKES))!, status: 'ready', turnId: 'old', ask: 'move the fixes', error: '' }
+  const { seen } = world(on, TAKES, { 'last:g:/quotes': { recap: earlier, at: 1_760_000_000_000 - 3_600_000 } })
+  on('command.run', () => ({ text: '' }) as any)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  expect(seen.toasts).toEqual(['🦉 earlier today here: "Moved the fixes onto main; one conflict left." was left in progress. Next step: Fix the migration conflict. /recap shows it.'])
+  const said = await ($ as any).command.run({ command: 'recap', args: '' })
+  expect(String(said?.text)).toContain("Showing this project's latest recap")
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  expect(await ui.find({ text: /from an earlier chat/ })).toBeDefined()
+  expect(await ui.find({ key: 'pick-o0' })).toBeDefined()
+})
+
+test('a second copy of the mod in the same chat gets one plain warning, not silence', async ($, on) => {
+  const { clock, seen, files } = world(on)
+  // Two copies starting together in one chat: the same chat id, different tokens.
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await clock.advance(2500)
+  const warnings = seen.toasts.filter(t => t.startsWith('⚠ recap is loaded twice'))
+  expect(warnings).toHaveLength(1)
+  expect(logEvents(files).filter(e => e.event === 'duplicate-copy').length).toBeGreaterThan(0)
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  expect(await ui.find({ text: /loaded twice/ })).toBeDefined()
 })
