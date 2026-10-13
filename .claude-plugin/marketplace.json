@@ -15,7 +15,7 @@
       "name": "turn-status",
       "source": "./plugins/turn-status",
       "description": "A quiet band above the prompt: what Claude is doing, how long, task progress and failures; hides when idle.",
-      "version": "0.5.0"
+      "version": "0.5.1"
     }
   ]
 }

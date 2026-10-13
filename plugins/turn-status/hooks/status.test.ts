@@ -2,6 +2,7 @@ import { test, expect, mock } from 'claude-code/testing'
 
 import type { Snap } from '../types'
 import { IDLE, LINGER_MS, applyTaskCall, describeTool, fmtClock, plainLine, words } from './model'
+import { memoryFs, recordToasts } from './test-helpers'
 
 test('tool calls read as plain actions', async () => {
   expect(describeTool({ tool: 'Edit', file_path: 'C:\\x\\hooks\\svg.ts' })).toBe('Editing svg.ts')
@@ -89,14 +90,9 @@ test('a turn: action while a tool runs, Thinking between, then done and gone', a
 test('a second copy of turn-status in the same chat gets one plain warning', async ($, on) => {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
-  const files = new Map<string, string>()
-  const norm = (p: string) => p.split(String.fromCharCode(92)).join('/')
-  on('fs.exists', ($: any, e: any) => ({ value: files.has(norm(e.path)) }) as any)
-  on('fs.read', ($: any, e: any) => ({ value: files.get(norm(e.path)) }) as any)
-  on('fs.write', ($: any, e: any) => { files.set(norm(e.path), e.text); return { value: undefined } as any })
+  const files = memoryFs(on)
   on('session.id', () => ({ value: 'chat-1' }) as any)
-  const toasts: string[] = []
-  on('ui.toast', ($: any, e: any) => { toasts.push(e.text); return { value: undefined } as any })
+  const toasts = recordToasts(on)
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: 'G:/q', surface: 'desktop', isInteractive: true })
   await clock.advance(2500)
