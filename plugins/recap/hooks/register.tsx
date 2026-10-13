@@ -44,8 +44,11 @@ const backlogKey = (cwd: string) => `backlog:${cwd.replace(/\\/g, '/').replace(/
 
 const freshPicks = (turnId: string): Picks => ({ turnId, chosen: [], lane: 'all' })
 
+/** Used when Claude refuses /recap (newer versions have a built-in one). */
+const FALLBACK_COMMAND = 'next'
+
 /** This chat's paths and project, filled in at session start. */
-const here = { dir: '', cwd: '', project: '' }
+const here = { dir: '', cwd: '', project: '', command: 'recap' }
 
 /** Appends one line to the debug log: every recap attempt, whether it worked, and why. Never throws. */
 async function note($: EngineInterface, event: string, detail: Record<string, unknown> = {}) {
@@ -57,6 +60,62 @@ async function note($: EngineInterface, event: string, detail: Record<string, un
     await $.fs.write(path, appendLine(existing, line))
   } catch {
     // The log is a debugging aid; losing a line must never break the recap.
+  }
+}
+
+/** What /recap (or its fallback name) does: open the pane, show the project's latest, or brew fresh options. */
+async function runCommand($: EngineInterface, args: string): Promise<{ text: string }> {
+  const job = await read($, lastJob)
+  const backlog = await read($, backlogAtom)
+  await $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS, focus: true })
+  const arg = args.trim()
+  if (arg === 'diary') {
+    const path = diaryFile(here.dir, here.cwd)
+    return { text: (await $.fs.exists(path)) ? `This project's progress log: ${path}` : 'No diary entries yet: one is added each time a recap finishes.' }
+  }
+  if (arg === 'log') return { text: `The recap log: ${here.dir}/log.jsonl` }
+  let hasRecap = (await read($, current)) !== null
+  // No recap in this chat yet, but the project has one from an earlier chat: show it straight away.
+  if (!hasRecap && arg !== 'again') {
+    const last = (await $.store.get(`last:${here.project}`)) as ProjectLast | undefined
+    if (last && Array.isArray(last.recap?.options)) {
+      const earlier: Recap = { ...last.recap, origin: 'earlier' }
+      await update($, current, () => earlier)
+      await update($, picksAtom, () => freshPicks(earlier.turnId))
+      await update($, viewAtom, () => 'options')
+      await note($, 'shown-earlier', { turnId: earlier.turnId })
+      hasRecap = true
+      return { text: 'Showing this project\'s latest recap. ↻ New options brews fresh ones for this chat.' }
+    }
+  }
+  // No recap yet (the last turn was small, or the chat began before the mod loaded): recap the chat as it stands.
+  if (arg === 'again' || !hasRecap) {
+    const now = await $.clock.now()
+    const target: Job = job ?? { turnId: `manual-${now.toString(36)}`, log: { ...EMPTY_LOG, ask: 'this conversation so far' }, answer: '' }
+    if (job === null) await update($, lastJob, () => target)
+    await update($, viewAtom, () => 'options')
+    $.clock.after(0, () => void brew($, target.turnId, target.log, target.answer))
+    return { text: hasRecap ? 'Brewing fresh options…' : 'Brewing options for this chat…' }
+  }
+  if (backlog.length > 0 && (await read($, current))?.status !== 'ready') await update($, viewAtom, () => 'backlog')
+  return { text: 'Next-prompt pane opened.' }
+}
+
+/** Registers /recap, or /next when the name is taken; returns the name that works. */
+async function registerCommand($: EngineInterface): Promise<string> {
+  const what = 'Show the next-prompt pane; add "again" for new options, "diary" or "log" for those files'
+  try {
+    await $.command.register({ name: 'recap', description: what })
+    return 'recap'
+  } catch (err) {
+    await note($, 'command-refused', { name: 'recap', why: err instanceof Error ? err.message : String(err) })
+  }
+  try {
+    await $.command.register({ name: FALLBACK_COMMAND, description: what })
+    return FALLBACK_COMMAND
+  } catch (err) {
+    await note($, 'command-refused', { name: FALLBACK_COMMAND, why: err instanceof Error ? err.message : String(err) })
+    return ''
   }
 }
 
@@ -137,8 +196,21 @@ export const register: Register = on => {
   let storeKey = backlogKey('')
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'recap', description: 'Show the next-prompt pane; "/recap again" brews new options, "/recap diary" and "/recap log" show those files' })
-    await $.tool.register({ name: 'interview', description: INTERVIEW_DESCRIPTION, inputSchema: INTERVIEW_SCHEMA, isDeferred: false })
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''
+    here.cwd = await $.session.cwd()
+    here.project = projectKey(here.cwd)
+    here.dir = home ? dataDir(home) : ''
+    here.command = await registerCommand($)
+    // Said once: Claude has a /recap of its own now, so the pane answers to /next.
+    if (here.command === FALLBACK_COMMAND && (await $.store.get('told-fallback')) !== true) {
+      await $.store.set('told-fallback', true)
+      $.ui.toast(`Claude now has its own /recap, so the ✨ Next pane opens with /${FALLBACK_COMMAND} instead.`, { timeoutMs: 12000 })
+    }
+    try {
+      await $.tool.register({ name: 'interview', description: INTERVIEW_DESCRIPTION, inputSchema: INTERVIEW_SCHEMA, isDeferred: false })
+    } catch (err) {
+      await note($, 'tool-refused', { why: err instanceof Error ? err.message : String(err) })
+    }
     storeKey = backlogKey(await $.session.cwd())
     const prefs = (await $.store.get('prefs')) as Partial<Prefs> | undefined
     if (prefs) await update($, prefsAtom, p => ({ ...p, ...prefs }))
@@ -146,13 +218,8 @@ export const register: Register = on => {
     if (learned) await update($, learnedAtom, () => learned)
     const backlog = (await $.store.get(storeKey)) as BacklogItem[] | undefined
     if (Array.isArray(backlog)) await update($, backlogAtom, () => backlog)
-
-    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''
-    here.cwd = await $.session.cwd()
-    here.project = projectKey(here.cwd)
-    here.dir = home ? dataDir(home) : ''
     await update($, warningAtom, () => null)
-    await note($, 'session-start', { root: $.plugin.root })
+    await note($, 'session-start', { root: $.plugin.root, command: here.command })
 
     // A second copy of this mod in the same chat: each copy announces itself, then looks for the other.
     if (here.dir) {
@@ -162,7 +229,7 @@ export const register: Register = on => {
         const raw = (await $.fs.exists(registry)) ? String(await $.fs.read(registry)) : '[]'
         await $.fs.write(registry, JSON.stringify(withInstance(raw, me)))
       }
-      await announce()
+      await announce().catch(err => note($, 'registry-failed', { why: err instanceof Error ? err.message : String(err) }))
       // Two copies writing at the same instant can drop each other: write again twice, a little apart.
       $.clock.after(300 + Math.floor(Math.random() * 300), () => void announce())
       $.clock.after(900 + Math.floor(Math.random() * 400), () => void announce())
@@ -227,48 +294,14 @@ export const register: Register = on => {
       await note($, 'turn-recapped', { turnId: e.turnId, edits: log.edits, research: log.research, tools: log.tools })
     } else if (e.agentId === undefined) {
       const why = skipReason(log, e.answer, e.isAborted) ?? 'it did not qualify'
-      $.ui.toast(`No recap this time: ${why}. /recap makes one anyway.`, { timeoutMs: 5000 })
+      $.ui.toast(`No recap this time: ${why}.${here.command ? ` /${here.command} makes one anyway.` : ''}`, { timeoutMs: 5000 })
       await note($, 'turn-skipped', { turnId: e.turnId, why, edits: log.edits, research: log.research, tools: log.tools })
     }
     return next(e)
   })
 
-  on('command.run', { command: 'recap' }, async ($, e) => {
-    const job = await read($, lastJob)
-    const backlog = await read($, backlogAtom)
-    await $.ui.open({ id: PANE, title: TITLE, rows: PANE_ROWS, focus: true })
-    const arg = e.args.trim()
-    if (arg === 'diary') {
-      const path = diaryFile(here.dir, here.cwd)
-      return { text: (await $.fs.exists(path)) ? `This project's progress log: ${path}` : 'No diary entries yet: one is added each time a recap finishes.' }
-    }
-    if (arg === 'log') return { text: `The recap log: ${here.dir}/log.jsonl` }
-    let hasRecap = (await read($, current)) !== null
-    // No recap in this chat yet, but the project has one from an earlier chat: show it straight away.
-    if (!hasRecap && arg !== 'again') {
-      const last = (await $.store.get(`last:${here.project}`)) as ProjectLast | undefined
-      if (last && Array.isArray(last.recap?.options)) {
-        const earlier: Recap = { ...last.recap, origin: 'earlier' }
-        await update($, current, () => earlier)
-        await update($, picksAtom, () => freshPicks(earlier.turnId))
-        await update($, viewAtom, () => 'options')
-        await note($, 'shown-earlier', { turnId: earlier.turnId })
-        hasRecap = true
-        return { text: 'Showing this project\'s latest recap. ↻ New options brews fresh ones for this chat.' }
-      }
-    }
-    // No recap yet (the last turn was small, or the chat began before the mod loaded): recap the chat as it stands.
-    if (arg === 'again' || !hasRecap) {
-      const now = await $.clock.now()
-      const target: Job = job ?? { turnId: `manual-${now.toString(36)}`, log: { ...EMPTY_LOG, ask: 'this conversation so far' }, answer: '' }
-      if (job === null) await update($, lastJob, () => target)
-      await update($, viewAtom, () => 'options')
-      $.clock.after(0, () => void brew($, target.turnId, target.log, target.answer))
-      return { text: hasRecap ? 'Brewing fresh options…' : 'Brewing options for this chat…' }
-    }
-    if (backlog.length > 0 && (await read($, current))?.status !== 'ready') await update($, viewAtom, () => 'backlog')
-    return { text: 'Next-prompt pane opened.' }
-  })
+  on('command.run', { command: 'recap' }, ($, e) => runCommand($, e.args))
+  on('command.run', { command: FALLBACK_COMMAND }, ($, e) => runCommand($, e.args))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const saved = await read($, current)

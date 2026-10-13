@@ -9,7 +9,7 @@
       "name": "recap",
       "source": "./plugins/recap",
       "description": "Next-prompt builder after real work: 28-40 customer-focused options in eight color-coded directions, ranked 80/20, with ready-made packages to take whole or save for later; Claude can interview you with clickable questions.",
-      "version": "0.10.1"
+      "version": "0.10.2"
     },
     {
       "name": "turn-status",

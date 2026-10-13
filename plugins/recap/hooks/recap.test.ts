@@ -142,6 +142,9 @@ const memoryFs = (on: any) => {
   return files
 }
 
+/** Command names the fake Claude refuses, as newer versions refuse /recap (it is built in). */
+const refusedCommands = new Set<string>()
+
 const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> = {}, session = 'chat-1') => {
   const clock = mock.clock(on, { now: 1_760_000_000_000 })
   mock.store(on, store)
@@ -151,7 +154,7 @@ const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> =
   const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[], forks: [] as string[] }
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: 'G:\\quotes' }) as any)
-  on('command.register', () => ({ value: undefined }) as any)
+  on('command.register', ($: any, e: any) => (refusedCommands.has(e.name) ? { deny: `"/${e.name}" refused: it is the built-in /${e.name}` } : { value: undefined }) as any)
   on('tool.register', ($: any, e: any) => { seen.tools.push(e.name); return { value: { tool: `mcp__recap__${e.name}` } } as any })
   on('ui.open', ($: any, e: any) => { seen.opened.push(e.id); return { value: { isPlaced: true } } as any })
   on('ui.toast', ($: any, e: any) => { seen.toasts.push(e.text); return { value: undefined } as any })
@@ -579,4 +582,39 @@ test('a crafted package name stays plain text in the Saved tab', async ($, on) =
   expect(drawn.includes('evil.example')).toBe(false)
   // The name arrives escaped (shown as written, never as bold, italics or a link).
   expect(await ui.find({ text: '📦 \\*\\*Bold\\*\\* click \\_now\\_' })).toBeDefined()
+})
+
+test('when Claude refuses /recap, the pane answers to /next and everything else still starts', async ($, on) => {
+  refusedCommands.add('recap')
+  try {
+    const { clock, seen, files } = world(on, TAKES, { prefs: { size: 2 } })
+    on('command.run', () => ({ text: '' }) as any)
+    await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+    await clock.settle()
+    // The rest of startup ran: the interview tool, the copy registry and the log.
+    expect(seen.tools).toEqual(['interview'])
+    expect(files.has('C:/Users/me/.claude/recap/instances.json')).toBe(true)
+    const log = String(files.get('C:/Users/me/.claude/recap/log.jsonl'))
+    expect(log).toContain('command-refused')
+    expect(log).toContain('"command":"next"')
+    expect(seen.toasts.some(t => t.includes('/next'))).toBe(true)
+
+    // A turn that gets no recap points at the name that works.
+    await $.turn.start({ text: 'hi', turnId: 't0' })
+    await $.turn.complete({ answer: 'Hello!', durationMs: 900, isAborted: false, turnId: 't0', reason: 'answer' } as any)
+    expect(seen.toasts.some(t => t.startsWith('No recap this time') && t.includes('/next makes one anyway'))).toBe(true)
+
+    const said = await ($ as any).command.run({ command: 'next', args: '' })
+    await clock.settle()
+    expect(String(said?.text ?? '')).toContain('Brewing options for this chat')
+    expect(seen.opened).toContain('recap')
+
+    // Told once: a later chat does not repeat the notice.
+    const before = seen.toasts.filter(t => t.includes('own /recap')).length
+    await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+    await clock.settle()
+    expect(seen.toasts.filter(t => t.includes('own /recap')).length).toBe(before)
+  } finally {
+    refusedCommands.clear()
+  }
 })
