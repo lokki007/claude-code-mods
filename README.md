@@ -34,6 +34,7 @@ Needs a recent Claude Code (one that supports hooks-module plugins, 2.1.29x or l
 When a turn edits files or digs through research, the **✨ Next** pane opens beside the chat:
 
 - **One line of status**: 💚 done, 🟡 in progress or 🟥 blocked, plus a one-sentence summary.
+- **✉ Explain to client**: a short, jargon-free note about the latest work (what changed, status, what is next), with a **Copy** button for your email or chat.
 - **Many options, not just one**: Claude looks at everything it saw (bugs, loose ends, shortcuts, missed chances), thinks about what your customers would value, and offers 28–40 next moves across eight directions:
 
   | | Direction | | Direction |
@@ -45,7 +46,8 @@ When a turn edits files or digs through research, the **✨ Next** pane opens be
 
   Each option has a colored bar per direction it serves, a rough size (quick, medium, big), and whether it needs your ideas (💬) or Claude can decide it alone (🤖).
 - **80/20 ranking**: the best value for the effort comes first; moves that help several directions at once rank higher, and the top three wear **⭐ 80/20**. Click a direction to see only its options.
-- **📦 Packages**: the options also come in 3 to 5 ready-made bundles, like "the 2 big ones", a handful of quick wins, or a dozen moves for a bigger push. **Use this package** picks the whole bundle (the prompt names it); **☆ Save for later** sends it to the Saved tab under its name, and every new recap is told what you saved, so it brings back what still matters.
+- **📦 Packages**: the options also come in 3 to 5 ready-made bundles, like "the 2 big ones", a handful of quick wins, or a dozen moves for a bigger push. Each shows a rough size from its options (⚡ quick, ⏱ about an hour, ⏱ a few hours, 📅 about a day, 📅 a few days). **Use this package** picks the whole bundle (the prompt names it); **☆ Save for later** sends it to the Saved tab under its name, and every new recap is told what you saved, so it brings back what still matters.
+- **Borrowed ideas**: ideas you picked and ran in your other projects are offered again where they fit, marked **↪ borrowed from** that project.
 - **It learns, gently**: after a few prompts it notices which directions you usually pick and nudges them up a little, never hiding the rest. **Reset learning** clears it.
 - **Save for later**: **☆ Save** keeps an option in the **Saved** tab for that project, across chats, so you can pick from it any time (`/recap` opens it).
 - **Build the prompt**: press **+ Pick** on a few options. The first is the main job, the rest ride along. Choose **Where** (keep it local, staging, production) and **Questions**:
@@ -59,7 +61,7 @@ It also keeps track for you:
 - **Never left guessing**: when a turn gets no pane, a short note says why ("nothing was changed, it was just a chat") and that `/recap` makes one anyway.
 - **The latest recap per project**: `/recap` in any chat of the same project shows it straight away; **↻ New options** brews fresh ones for that chat.
 - **A gentle reminder**: open a chat on a project whose last piece of work was left 🟡 or 🟥, and the owl names it with one next step.
-- **A progress diary per project**: each finished recap adds a plain, dated entry (what was done, what was asked, status) you can share with clients. `/recap diary` shows where it is.
+- **A progress diary per project**: each finished recap adds a dated update written for clients: the outcome in plain words, the status and what comes next, with no file names or technical terms. `/recap diary` shows where it is.
 - **A log for debugging**: every attempt, whether it worked and why, in `~/.claude/recap/log.jsonl` (`/recap log`).
 - **A plain warning** if two copies of the mod end up loaded in one chat, instead of failing quietly. turn-status does the same.
 
