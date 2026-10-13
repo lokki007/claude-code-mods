@@ -21,6 +21,15 @@ export type Option = {
   prompt: string
 }
 
+/** A ready-made bundle of options: take it whole, or save it for later. */
+export type Package = {
+  name: string
+  /** what the customer gets from it, in a sentence */
+  pitch: string
+  /** the options in it, by id, in the order they should be done */
+  ids: string[]
+}
+
 export type Recap = {
   status: 'brewing' | 'ready' | 'error'
   turnId: string
@@ -30,13 +39,14 @@ export type Recap = {
   verdict: Verdict
   verdictWhy: string
   options: Option[]
+  packages: Package[]
   error: string
   /** set when /recap shows the project's latest recap from an earlier chat */
   origin?: 'earlier'
 }
 
 /** An option saved for later, kept per project across chats. */
-export type BacklogItem = Option & { savedAt: number }
+export type BacklogItem = Option & { savedAt: number; /** the package it was saved with, if any */ pack?: string }
 
 /** Where the work should end up. */
 export type Deploy = 'local' | 'staging' | 'production'

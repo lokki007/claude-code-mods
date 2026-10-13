@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Picks, Prefs, Recap, View } from '../types'
+import type { Autonomy, BacklogItem, Deploy, Interview, Job, Lane, Learned, Option, Package, Picks, Prefs, Recap, View } from '../types'
 import { owlSvg } from './owl'
 import type { Instance, ProjectLast } from './journal'
 import {
@@ -12,7 +12,7 @@ import type { HistoryRow, Takes, TurnLog } from './recap'
 import {
   AUTONOMY, DEPLOY, INTERVIEW_DESCRIPTION, INTERVIEW_SCHEMA, LANES, LANE_KEYS, SYSTEM, answer, answersText,
   bestInLane, composePrompt, digestFrom, favourites, forkPrompt, isSaved, isWorthRecap, learnFrom, logTool, newInterview,
-  md, parseQuestions, parseTakes, promptFor, ranked, toggleSaved, topPicks, willInterview,
+  md, packageOf, parseQuestions, parseTakes, promptFor, ranked, savePackage, toggleSaved, topPicks, willInterview,
 } from './recap'
 
 const PANE = 'recap'
@@ -85,13 +85,14 @@ async function keep($: EngineInterface, r: Recap) {
  */
 async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answerText: string) {
   await update($, current, () => ({
-    status: 'brewing', turnId, ask: turnLog.ask, tldr: '', verdict: 'in_progress', verdictWhy: '', options: [], error: '',
+    status: 'brewing', turnId, ask: turnLog.ask, tldr: '', verdict: 'in_progress', verdictWhy: '', options: [], packages: [], error: '',
   }) satisfies Recap)
   let takes: Takes | null = null
   let why = ''
   let source = 'conversation'
   try {
-    const forked = await $.model.fork({ prompt: forkPrompt(answerText) })
+    const saved = await read($, backlogAtom)
+    const forked = await $.model.fork({ prompt: forkPrompt(answerText, saved) })
     takes = forked.isAnswered ? parseTakes(forked.text) : null
     if (takes === null) {
       source = 'history fallback'
@@ -104,7 +105,7 @@ async function brew($: EngineInterface, turnId: string, turnLog: TurnLog, answer
         if (Array.isArray(rows)) digest = digestFrom(rows as unknown as HistoryRow[])
       }
       const reply = await $.model.complete({
-        model: 'haiku', system: SYSTEM, prompt: promptFor(digest.log, digest.answer), maxTokens: 3000, effort: 'low',
+        model: 'haiku', system: SYSTEM, prompt: promptFor(digest.log, digest.answer, saved), maxTokens: 8000, effort: 'low',
       })
       takes = reply.isAnswered ? parseTakes(reply.text) : null
       why = reply.isAnswered ? 'the owl mumbled something unreadable' : `the model said no (${reply.reason})`
@@ -430,7 +431,8 @@ export const register: Register = on => {
     const options = hasOptions ? r!.options : []
     const pool: Option[] = [...options, ...backlog]
     const picked = picks.chosen.map(id => pool.find(o => o.id === id)).filter((o): o is Option => o !== undefined)
-    const composed = composePrompt(pool, picks.chosen, prefs.deploy, prefs.autonomy)
+    const packages: Package[] = hasOptions && Array.isArray(r!.packages) ? r!.packages : []
+    const composed = composePrompt(pool, picks.chosen, prefs.deploy, prefs.autonomy, packageOf(packages, picks.chosen))
 
     const send = async (how: 'replace' | 'append' | 'submit') => {
       if (!composed) {
@@ -484,7 +486,7 @@ export const register: Register = on => {
                 {pickButton(o)}
                 <Button key={`unsave-${o.id}`} variant="secondary" onPress={() => toggleSave(o)}>✕</Button>
                 {bars(o)}
-                {optionBody(o, '', `saved ${new Date(o.savedAt).toISOString().slice(0, 10)}`)}
+                {optionBody(o, '', `${o.pack ? `📦 ${o.pack} · ` : ''}saved ${new Date(o.savedAt).toISOString().slice(0, 10)}`)}
               </Box>
             ))}
           </Box>
@@ -509,6 +511,44 @@ export const register: Register = on => {
               </Button>
             ))}
           </Box>
+          {packages.length > 0
+            ? (
+              <Box flexDirection="column" gap={1}>
+                <Markdown text={`${TITLE_H[prefs.size] || '**'}📦 Packages${TITLE_H[prefs.size] ? '' : '**'}`} />
+                <Box flexDirection="row" flexWrap="wrap" gap={1}>
+                  {packages.map((p, i) => {
+                    const isUsed = packageOf([p], picks.chosen) !== undefined
+                    const allSaved = p.ids.every(id => {
+                      const o = options.find(x => x.id === id)
+                      return o !== undefined && isSaved(backlog, o)
+                    })
+                    const lanes = [...new Set(p.ids.flatMap(id => options.find(o => o.id === id)?.lanes ?? []))]
+                    return (
+                      <Box key={`pkg-${i}`} width={e.props.bodyColumns >= 120 ? '32%' : '100%'} flexDirection="column" borderStyle="round" borderColor={isUsed ? '#A487E0' : undefined} borderDimColor={!isUsed} paddingX={1}>
+                        <Text bold>{`${p.name} · ${p.ids.length}`}</Text>
+                        <Markdown dimColor text={`${lanes.slice(0, 4).map(l => LANES[l].icon).join('')} ${md(p.pitch)}`} />
+                        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+                          <Button key={`pkg-use-${i}`} variant={isUsed ? 'primary' : 'secondary'} onPress={() => setPicks(pk => ({ ...pk, chosen: isUsed ? [] : [...p.ids] }))}>
+                            {isUsed ? '✓ Using this' : 'Use this package'}
+                          </Button>
+                          <Button key={`pkg-save-${i}`} variant={allSaved ? 'primary' : 'secondary'} onPress={async () => {
+                            if (allSaved) return
+                            const now = await $.clock.now()
+                            const nextBacklog = savePackage(backlog, options, p, now)
+                            await update($, backlogAtom, () => nextBacklog)
+                            await $.store.set(storeKey, nextBacklog)
+                            $.ui.toast(`Saved "${p.name}" for later: it's in ☆ Saved, and new recaps will consider it`)
+                          }}>
+                            {allSaved ? '★ Saved' : '☆ Save for later'}
+                          </Button>
+                        </Box>
+                      </Box>
+                    )
+                  })}
+                </Box>
+              </Box>
+            )
+            : null}
           {hasLearned
             ? (
               <Box flexDirection="row" gap={1} alignItems="center">

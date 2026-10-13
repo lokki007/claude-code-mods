@@ -5,6 +5,7 @@ import {
   parseQuestions, parseTakes, ranked, score, toggleSaved, topPicks,
 } from './recap'
 import type { Option } from '../types'
+import { savePackage, packageOf, forkPrompt } from './recap'
 import { diaryEntry, diaryFile, otherCopies, reminderFor, skipReason, withInstance } from './journal'
 
 const OPTIONS = [
@@ -16,7 +17,12 @@ const OPTIONS = [
   { title: 'Voice-read quotes', detail: 'A fresh, playful way in.', lanes: ['wild'], impact: 2, effort: 'L', needs_you: true, prompt: 'Prototype reading quotes aloud' },
   { title: 'Bogus lane', detail: 'Unknown lane falls back.', lanes: ['nonsense'], impact: 9, effort: 'XL', prompt: 'Do the bogus thing' },
 ]
-const TAKES = { tldr: 'Moved the fixes onto main; one conflict left.', verdict: 'in_progress', verdict_why: 'Conflict blocks merge.', options: OPTIONS }
+const PACKAGES = [
+  { name: 'The 2 big ones', pitch: 'Ship the fix and open a new revenue line.', options: [1, 4] },
+  { name: 'Quick wins', pitch: 'Small, safe improvements customers notice.', options: [1, 2, 5] },
+  { name: 'Broken', pitch: 'Points at nothing.', options: [99] },
+]
+const TAKES = { tldr: 'Moved the fixes onto main; one conflict left.', verdict: 'in_progress', verdict_why: 'Conflict blocks merge.', options: OPTIONS, packages: PACKAGES }
 const QUESTIONS = {
   questions: [
     { question: 'Who is this mostly for?', options: [{ label: 'Just me' }, { label: 'Friends', recommended: true }, { label: 'Paying users', hint: 'needs accounts' }] },
@@ -142,7 +148,7 @@ const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> =
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const files = memoryFs(on)
   on('session.id', () => ({ value: session }) as any)
-  const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[] }
+  const seen = { filled: [] as string[], submitted: [] as string[], suggested: [] as string[], opened: [] as string[], tools: [] as string[], toasts: [] as string[], forks: [] as string[] }
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: 'G:\\quotes' }) as any)
   on('command.register', () => ({ value: undefined }) as any)
@@ -157,7 +163,7 @@ const world = (on: any, takes: unknown = TAKES, store: Record<string, unknown> =
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: 'ok', isError: false }) as any)
   // takes null: the fork has nothing to answer from, as right after the mod reloads.
-  on('model.fork', () => (takes === null
+  on('model.fork', ($: any, e: any) => (seen.forks.push(e.prompt), takes === null
     ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
     : { value: { isAnswered: true, text: JSON.stringify(takes), usage: {} } }) as any)
   return { clock, seen, files }
@@ -171,7 +177,8 @@ const workTurn = async ($: any, clock: any, turnId = 't1') => {
 }
 
 test('after real work: pick options, filter a lane, set where and questions, put it in the prompt', async ($, on) => {
-  const { clock, seen } = world(on)
+  // No packages here: this is about picking one by one (two picks matching a package would name it).
+  const { clock, seen } = world(on, { ...TAKES, packages: [] })
   await $.session.start({ cwd: 'G:\\quotes', surface: 'desktop', isInteractive: true })
   expect(seen.tools).toEqual(['interview'])
   await workTurn($, clock)
@@ -513,4 +520,49 @@ test('a second copy of the mod in the same chat gets one plain warning, not sile
   expect(logEvents(files).filter(e => e.event === 'duplicate-copy').length).toBeGreaterThan(0)
   const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
   expect(await ui.find({ text: /loaded twice/ })).toBeDefined()
+})
+
+test('packages: read by option number, prompt names the package, saving keeps its name', async () => {
+  const t = parseTakes(JSON.stringify(TAKES))!
+  expect(t.packages.map(p => [p.name, p.ids])).toEqual([['The 2 big ones', ['o0', 'o3']], ['Quick wins', ['o0', 'o1', 'o4']]])
+  expect(packageOf(t.packages, ['o3', 'o0'])?.name).toBe('The 2 big ones')
+  expect(packageOf(t.packages, ['o0'])).toBeUndefined()
+  expect(composePrompt(t.options, ['o0', 'o3'], 'local', 'solo', t.packages[0])).toBe([
+    'Let\'s do the "The 2 big ones" package: Ship the fix and open a new revenue line. In this order:',
+    '1. Merge the two migrations into one and rerun the checks\n2. Sketch paid quote packs and how people would buy them',
+    'Keep it local for now; do not deploy anything.',
+    'Do not stop to ask me questions: make sensible decisions yourself and tell me briefly what you chose.',
+  ].join('\n\n'))
+  const kept = savePackage([], t.options, t.packages[1]!, 5000)
+  expect(kept.map(b => [b.title, b.pack])).toEqual([
+    ['Fix the migration conflict', 'Quick wins'], ['Split the giant quotes file', 'Quick wins'], ['Quote of the day email', 'Quick wins'],
+  ])
+  expect(new Set(kept.map(b => b.id)).size).toBe(3)
+  // Saving again adds nothing twice.
+  expect(savePackage(kept, t.options, t.packages[0]!, 6000)).toHaveLength(4)
+  // New recaps are told what is saved.
+  expect(forkPrompt('done', kept)).toContain('- Fix the migration conflict (saved with "Quick wins")')
+  expect(forkPrompt('done', [])).not.toContain('saved these for later')
+})
+
+test('use one package now, save another for later, and the next recap hears about it', async ($, on) => {
+  const { clock, seen } = world(on)
+  await $.session.start({ cwd: 'G:\quotes', surface: 'desktop', isInteractive: true })
+  await workTurn($, clock, 't1')
+  const ui = await $.ui.mount({ ...PANE(200), surface: 'desktop' })
+  expect(await ui.find({ text: /The 2 big ones · 2/ })).toBeDefined()
+  await ui.press({ key: 'pkg-use-0' })
+  expect(await ui.find({ key: 'pick-o0', text: '✓ 1 main' })).toBeDefined()
+  expect(await ui.find({ key: 'pick-o3', text: '✓ 2' })).toBeDefined()
+  await ui.press({ key: 'pkg-save-1' })
+  expect(await ui.find({ key: 'pkg-save-1', text: '★ Saved' })).toBeDefined()
+  expect(await ui.find({ key: 'tab-backlog', text: '☆ Saved 3' })).toBeDefined()
+  await ui.press({ key: 'fill' })
+  expect(seen.filled.at(-1)).toContain('Let\'s do the "The 2 big ones" package')
+  await ui.press({ key: 'tab-backlog' })
+  expect(await ui.find({ text: /📦 Quick wins/ })).toBeDefined()
+  await ui.unmount()
+  await workTurn($, clock, 't2')
+  expect(seen.forks.at(-1)).toContain('The person saved these for later')
+  expect(seen.forks.at(-1)).toContain('- Quote of the day email (saved with "Quick wins")')
 })

@@ -8,8 +8,8 @@
     {
       "name": "recap",
       "source": "./plugins/recap",
-      "description": "Next-prompt builder after real work: many color-coded options across fix, tech debt, features, design, money, growth, ship and wild ideas, ranked 80/20; pick a few, choose where it lands and whether Claude interviews you first.",
-      "version": "0.9.0"
+      "description": "Next-prompt builder after real work: 28-40 customer-focused options in eight color-coded directions, ranked 80/20, with ready-made packages to take whole or save for later; Claude can interview you with clickable questions.",
+      "version": "0.10.0"
     },
     {
       "name": "turn-status",
