@@ -1,6 +1,6 @@
 import type { Recap } from '../types'
 import type { TurnLog } from './recap'
-import { forClient } from './recap'
+import { forClient } from './client'
 
 // Pure parts of the recap's memory: why a turn got no recap, the per-project
 // diary and reminder, the debug log, and spotting a second copy of the mod.
@@ -33,11 +33,19 @@ export const skipReason = (log: TurnLog, answer: string, isAborted: boolean): st
 }
 
 const DAY = 86_400_000
-const LABEL = { done: 'Done', in_progress: 'In progress', blocked: 'Blocked' } as const
 
-/** The diary's opening lines, written once per project. */
-export const diaryHeader = (cwd: string) =>
-  `# ${projectName(cwd)}: progress updates\n\nA running record of the work, newest last. Each update is added when a piece of work finishes.\n`
+/** The diary's opening lines, naming the client when one is set for the project. */
+export const diaryHeader = (cwd: string, client = '') =>
+  `# ${projectName(cwd)}: progress updates${client.trim() ? ` for ${client.trim()}` : ''}\n\nA running record of the work, newest last. Each update is added when a piece of work finishes.\n`
+
+/** The diary with its opening lines replaced (say, after the client's name was set), entries kept. */
+export const withHeader = (diary: string, header: string): string => {
+  const at = diary.indexOf('\n## ')
+  return at < 0 ? header : header + diary.slice(at)
+}
+
+/** Pieces of work finished in a row: one more when this one is done, back to none when it is not. */
+export const nextStreak = (streak: number, verdict: Recap['verdict']): number => (verdict === 'done' ? streak + 1 : 0)
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const STATUS = { done: '✅ Done', in_progress: '🟡 In progress', blocked: '⏸ Waiting on a decision' } as const
@@ -59,7 +67,7 @@ export type ProjectLast = { recap: Recap; at: number }
  * left unfinished: what it was and one next step. Null when there is nothing
  * to nudge about (it was done, or it is more than two weeks old).
  */
-export const reminderFor = (last: ProjectLast | undefined, now: number, topTitle?: string): string | null => {
+export const reminderFor = (last: ProjectLast | undefined, now: number, topTitle?: string, command = 'recap'): string | null => {
   if (!last || last.recap.status !== 'ready' || last.recap.verdict === 'done') return null
   const age = now - last.at
   if (age < 0 || age > 14 * DAY) return null
@@ -67,7 +75,7 @@ export const reminderFor = (last: ProjectLast | undefined, now: number, topTitle
   const ago = days === 0 ? 'earlier today' : days === 1 ? 'yesterday' : `${days} days ago`
   const state = last.recap.verdict === 'blocked' ? 'was blocked' : 'was left in progress'
   const step = topTitle ? ` Next step: ${topTitle}.` : ''
-  return `🦉 ${ago} here: "${last.recap.tldr}" ${state}.${step} /recap shows it.`
+  return `🦉 ${ago} here: "${last.recap.tldr}" ${state}.${step}${command ? ` /${command} shows it.` : ''}`
 }
 
 /** The log with one more line, keeping the newest lines only. */

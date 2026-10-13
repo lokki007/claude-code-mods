@@ -23,15 +23,6 @@ export type Option = {
   borrowed?: string
 }
 
-/** A ready-made bundle of options: take it whole, or save it for later. */
-export type Package = {
-  name: string
-  /** what the customer gets from it, in a sentence */
-  pitch: string
-  /** the options in it, by id, in the order they should be done */
-  ids: string[]
-}
-
 export type Recap = {
   status: 'brewing' | 'ready' | 'error'
   turnId: string
@@ -43,14 +34,13 @@ export type Recap = {
   /** a short, jargon-free note about the work for the person's client (missing on older recaps) */
   client?: string
   options: Option[]
-  packages: Package[]
   error: string
   /** set when /recap shows the project's latest recap from an earlier chat */
   origin?: 'earlier'
 }
 
 /** An option saved for later, kept per project across chats. */
-export type BacklogItem = Option & { savedAt: number; /** the package it was saved with, if any */ pack?: string }
+export type BacklogItem = Option & { savedAt: number; /** the package it was saved with, if any (older saves) */ pack?: string }
 
 /** Where the work should end up. */
 export type Deploy = 'local' | 'staging' | 'production'
@@ -87,6 +77,15 @@ export type Interview = {
 /** How often each lane has been in what the person sent: the gentle ranking nudge. */
 export type Learned = Partial<Record<Lane, number>>
 
+/** How "Explain to client" notes read. */
+export type Tone = 'friendly' | 'formal' | 'short'
+
+/** Per project: who the client is, how the person signs off, and the tone of the notes. */
+export type ClientSettings = { name: string; signoff: string; tone: Tone }
+
+/** The "even simpler" rewrite of a recap's client note. */
+export type Simpler = { turnId: string; status: 'writing' | 'ready' | 'error'; text: string; isOn: boolean }
+
 /** An idea the person picked and sent, remembered so other projects can borrow it. */
 export type Win = { title: string; detail: string; prompt: string; lanes: Lane[]; effort: 'S' | 'M' | 'L'; project: string; at: number }
 
@@ -112,6 +111,12 @@ declare module 'claude-code' {
       warning: string | null
       /** whether the "Explain to client" note is open */
       client: boolean
+      /** this project's client name, sign-off and tone */
+      clientSettings: ClientSettings
+      /** the "even simpler" note for the current recap */
+      simpler: Simpler | null
+      /** pieces of work finished in a row in this project, for the owl's mood */
+      streak: number
     }
   }
 }

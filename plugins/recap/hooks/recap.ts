@@ -1,4 +1,5 @@
-import type { Autonomy, BacklogItem, Deploy, Interview, Lane, Learned, Option, Package, Question, Verdict, Win } from '../types'
+import { forClient } from './client'
+import type { Autonomy, BacklogItem, Deploy, Interview, Lane, Learned, Option, Question, Verdict, Win } from '../types'
 
 // Pure parts: when a turn earns a recap, what to ask the model, reading its
 // answer, ranking the options, and building the next prompt from the picks.
@@ -86,7 +87,6 @@ const SHAPE = `Reply with JSON only, no code fence, exactly these keys:
   "ship": deploying, releasing, monitoring, operations
   "wild": fresh, bold or creative bets the person probably has not thought of (at least 6 of these)
 Each option is {"title": at most 9 plain words, "detail": at most 18 words on what it is and why it matters, "lanes": 1 to 3 lane keys, most related first, "impact": 1 to 5 for the value if done, "effort": "S", "M" or "L", "needs_you": true when it turns on the person's own taste, ideas or business knowledge (a new feature, a design direction, pricing), false when it can be done well from the code alone (bugs, refactors, tests, deploys), "prompt": the prompt that asks for it, first person, imperative, at most 35 words, "borrowed": only for an idea taken from the person's other projects (when any are listed): that project's name; otherwise leave it out}.
-"packages": 3 to 5 ready-made bundles of the options above that make sense done together, each a different size and aim: for example "the 2 big ones" (two major moves), a pack of about 7 quick wins, and a pack of about 12 for a bigger push (a launch, a redesign, a growth sprint). Each is {"name": at most 4 words, "pitch": at most 18 words on what the customer gets from it, "options": the option numbers in it (1 is the first option above), in the order to do them}. Packages may share options.
 The person is not very technical: write titles and details in plain language, and never plan to ask them technical questions.`
 
 /** For a fork of the session: the model already has the whole conversation. */
@@ -94,7 +94,7 @@ The person is not very technical: write titles and details in plain language, an
 export const savedNote = (saved: readonly { title: string; pack?: string }[]): string =>
   saved.length === 0
     ? ''
-    : `\nThe person saved these for later (newest first). Bring back, with the exact same title, any that still matter after this turn, and use them in packages where they fit:\n${saved.slice(0, 30).map(s => `- ${s.title}${s.pack ? ` (saved with "${s.pack}")` : ''}`).join('\n')}\n`
+    : `\nThe person saved these for later (newest first). Bring back, with the exact same title, any that still matter after this turn:\n${saved.slice(0, 30).map(s => `- ${s.title}${s.pack ? ` (saved with "${s.pack}")` : ''}`).join('\n')}\n`
 
 /** Ideas the person picked and ran in their other projects, for the model to borrow where they fit. */
 export const borrowNote = (ideas: readonly { title: string; project: string }[]): string =>
@@ -120,7 +120,7 @@ export const promptFor = (log: TurnLog, answer: string, saved: readonly { title:
   return `The person asked:\n${one(log.ask, 1200) || '(continuation of earlier work)'}\n\nWhat the assistant did, in order:\n${steps}\n\nThe assistant's final reply:\n${answer.slice(0, 6000)}${savedNote(saved)}${borrowNote(ideas)}`
 }
 
-export type Takes = { tldr: string; verdict: Verdict; verdictWhy: string; client: string; options: Option[]; packages: Package[] }
+export type Takes = { tldr: string; verdict: Verdict; verdictWhy: string; client: string; options: Option[] }
 
 /**
  * Model-written text made safe to show and to send: links and images reduced
@@ -179,60 +179,10 @@ export const parseTakes = (text: string, projects: readonly string[] = []): Take
       .filter(o => o.title && o.prompt)
       .slice(0, 40)
     if (options.length === 0) return null
-    // Packages name options by their number in the reply; keep the ones that still exist after tidying.
-    const byNumber = new Map(list(j.options).map((o, i) => [i + 1, plain(o?.title, 90)]))
-    const packages: Package[] = list(j.packages)
-      .map(p => {
-        const ids = [...new Set(list(p?.options).map(n => byNumber.get(Number(n))).filter(Boolean))]
-          .map(title => options.find(o => o.title === title)?.id)
-          .filter((id): id is string => Boolean(id))
-        return { name: plain(p?.name, 40), pitch: plain(p?.pitch, 160), ids }
-      })
-      .filter(p => p.name && p.ids.length >= 2)
-      .slice(0, 5)
-    return { tldr, verdict: j.verdict, verdictWhy: plain(j.verdict_why, 120), client: forClient(plain(j.client, 600)), options, packages }
+    return { tldr, verdict: j.verdict, verdictWhy: plain(j.verdict_why, 120), client: forClient(plain(j.client, 600)), options }
   } catch {
     return null
   }
-}
-
-/**
- * Text for a client: file paths, file names, code and version numbers taken
- * out, as a safety net under the model's own plain wording.
- */
-export const forClient = (s: string): string =>
-  s
-    .replace(/`[^`]*`/g, ' ')
-    .replace(/\b[A-Za-z]:[\\/][^\s,;)]*/g, ' ') // C:\path or C:/path
-    .replace(/(^|\s)(?:~|\.{1,2})?\/?(?:[\w.-]+\/)+[\w-]+\.[A-Za-z0-9]{1,5}\b/g, '$1a file') // some/dir/file.ts
-    .replace(/(^|\s)(?:~|\.{1,2})?\/?(?:[\w.-]+\/){2,}[\w.-]*/g, '$1') // some/dir/ (one slash, as in "and/or", stays)
-    .replace(/\b[\w-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|html?|css|scss|py|rb|go|rs|java|kt|swift|sh|ps1|ya?ml|toml|lock|sql|txt|env)\b/gi, 'a file')
-    .replace(/\bv?\d+\.\d+\.\d+\b/g, 'the new version')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-/** Rough working time per option size, in minutes. */
-const EFFORT_MINUTES = { S: 15, M: 45, L: 150 } as const
-
-/** A package's rough size from its options' effort: quick, about an hour, a few hours, about a day or a few days. */
-export const packageSize = (pack: Package, options: readonly Option[]): string => {
-  const minutes = pack.ids.reduce((sum, id) => sum + EFFORT_MINUTES[options.find(o => o.id === id)?.effort ?? 'M'], 0)
-  if (minutes <= 45) return '⚡ quick'
-  if (minutes <= 120) return '⏱ about an hour'
-  if (minutes <= 300) return '⏱ a few hours'
-  if (minutes <= 720) return '📅 about a day'
-  return '📅 a few days'
-}
-
-const STATUS_FOR_CLIENT = { done: 'Done', in_progress: 'In progress', blocked: 'Waiting on a decision' } as const
-
-/** The note behind "Explain to client": ready to paste into an email or chat. */
-export const clientNote = (r: { tldr: string; verdict: Verdict; client?: string }, next?: string): string => {
-  const body = (r.client && r.client.trim()) || forClient(r.tldr)
-  const lines = [body, '', `Status: ${STATUS_FOR_CLIENT[r.verdict]}`]
-  if (next) lines.push(`Next up: ${forClient(next)}`)
-  return lines.join('\n')
 }
 
 /** Remembers what the person sent, newest first, one entry per idea per project. */
@@ -288,10 +238,6 @@ export const score = (o: Option, learned: Learned = {}): number => {
 export const ranked = (options: readonly Option[], learned: Learned = {}): Option[] =>
   options.map((o, i) => ({ o, i, s: score(o, learned) })).sort((a, b) => b.s - a.s || a.i - b.i).map(x => x.o)
 
-/** The package the picks are exactly, if any: same options, any order. */
-export const packageOf = (packages: readonly Package[], chosen: readonly string[]): Package | undefined =>
-  packages.find(p => p.ids.length === chosen.length && p.ids.every(id => chosen.includes(id)))
-
 /** The vital few: the top three overall. */
 export const topPicks = (options: readonly Option[], learned: Learned = {}): Set<string> =>
   new Set(ranked(options, learned).slice(0, 3).map(o => o.id))
@@ -328,16 +274,6 @@ export const toggleSaved = (backlog: readonly BacklogItem[], o: Option, now: num
   isSaved(backlog, o)
     ? backlog.filter(b => !(b.title === o.title && b.prompt === o.prompt))
     : [{ ...o, id: freshId(backlog, now), savedAt: now }, ...backlog].slice(0, 100)
-
-/** The backlog with every option of a package added (ones already saved stay as they are). */
-export const savePackage = (backlog: readonly BacklogItem[], options: readonly Option[], pack: Package, now: number): BacklogItem[] => {
-  let out = [...backlog]
-  for (const id of [...pack.ids].reverse()) {
-    const o = options.find(x => x.id === id)
-    if (o && !isSaved(out, o)) out = [{ ...o, id: freshId(out, now), savedAt: now, pack: pack.name }, ...out]
-  }
-  return out.slice(0, 100)
-}
 
 /** An id no saved option has yet: two saves in the same millisecond must not share one, or the pane cannot draw. */
 const freshId = (backlog: readonly BacklogItem[], now: number): string => {
@@ -379,20 +315,10 @@ export const composePrompt = (
   chosen: readonly string[],
   deploy: Deploy,
   autonomy: Autonomy,
-  /** set when the picks are exactly one package: the prompt names it */
-  pack?: Package,
 ): string => {
   const picked = chosen.map(id => options.find(o => o.id === id)).filter((o): o is Option => o !== undefined)
   const [main, ...rest] = picked
   if (main === undefined) return ''
-  if (pack && picked.length > 1) {
-    return [
-      `Let's do the "${pack.name}" package: ${pack.pitch.replace(/[.!?]$/, '')}. In this order:`,
-      picked.map((o, i) => `${i + 1}. ${clause(o.prompt)}`).join('\n'),
-      DEPLOY[deploy].text,
-      willInterview(picked, autonomy) ? INTERVIEW : SOLO,
-    ].join('\n\n')
-  }
   const parts = [sentence(main.prompt)]
   const [only] = rest
   if (rest.length === 1 && only) parts.push(`Also ${clause(only.prompt).replace(/^./, c => c.toLowerCase())}.`)
