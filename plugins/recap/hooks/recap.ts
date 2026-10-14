@@ -296,6 +296,8 @@ export const AUTONOMY: Record<Autonomy, { label: string; hint: string }> = {
 }
 
 const INTERVIEW = 'Before you start, interview me with the recap interview tool: up to 5 short, plain-language multiple-choice questions about what I want (goals, taste, priorities). I am not technical, so make every technical decision yourself.'
+/** The same ask for an assistant with no interview tool (ChatGPT Codex): plain numbered questions. */
+export const INTERVIEW_PLAIN = 'Before you start, ask me up to 5 short, plain-language multiple-choice questions about what I want (goals, taste, priorities), numbered, each with lettered answers, then wait for my answers. I am not technical, so make every technical decision yourself.'
 const SOLO = 'Do not stop to ask me questions: make sensible decisions yourself and tell me briefly what you chose.'
 
 const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`)
@@ -315,6 +317,8 @@ export const composePrompt = (
   chosen: readonly string[],
   deploy: Deploy,
   autonomy: Autonomy,
+  /** how to ask for the interview: Claude has a tool for it, other assistants get plain questions */
+  interview: string = INTERVIEW,
 ): string => {
   const picked = chosen.map(id => options.find(o => o.id === id)).filter((o): o is Option => o !== undefined)
   const [main, ...rest] = picked
@@ -324,7 +328,7 @@ export const composePrompt = (
   if (rest.length === 1 && only) parts.push(`Also ${clause(only.prompt).replace(/^./, c => c.toLowerCase())}.`)
   else if (rest.length > 1) parts.push(`Also:\n${rest.map(o => `- ${clause(o.prompt)}`).join('\n')}`)
   parts.push(DEPLOY[deploy].text)
-  parts.push(willInterview(picked, autonomy) ? INTERVIEW : SOLO)
+  parts.push(willInterview(picked, autonomy) ? interview : SOLO)
   return parts.join('\n\n')
 }
 

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>✨ Next for Codex</title>
+<style>
+  :root {
+    --bg: #faf8f5; --card: #ffffff; --ink: #24201c; --dim: #6f675f; --line: #e8e2da; --soft: #f2eee8;
+    --accent: #8b6fd6; --accent-ink: #ffffff; --ok: #2f7d4f; --warn: #a86b00; --bad: #c4453c; --client: #4f9a62;
+    --size: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1916; --card: #24211d; --ink: #f1ece6; --dim: #a59c92; --line: #38332d; --soft: #2c2823;
+      --accent: #a487e0; --accent-ink: #1b1916; --ok: #6fcf97; --warn: #f2b94b; --bad: #f2777b; --client: #7fb77e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: var(--size)/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+  button { font: inherit; font-size: .92em; color: var(--ink); background: var(--soft); border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer; min-height: 34px; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  input, select { font: inherit; font-size: .92em; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; min-height: 34px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .dim { color: var(--dim); }
+  .small { font-size: .85em; }
+  header.top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  header.top .owl { font-size: 1.9em; line-height: 1; }
+  header.top h1 { font-size: 1.25em; margin: 0; line-height: 1.35; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .client { border-color: var(--client); margin-bottom: 14px; }
+  .client pre { white-space: pre-wrap; font: inherit; margin: 8px 0; }
+  .layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; align-items: start; margin-top: 12px; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .opt { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .opt:first-child { border-top: 0; }
+  .bars { display: flex; gap: 2px; padding-top: 4px; }
+  .bars i { width: 4px; border-radius: 2px; min-height: 34px; display: block; }
+  .opt .title { font-weight: 600; }
+  .opt .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .badge { font-size: .8em; padding: 1px 8px; border-radius: 99px; background: var(--soft); border: 1px solid var(--line); margin-left: 6px; }
+  .builder { position: sticky; top: 12px; border-color: var(--accent); }
+  .builder h2 { font-size: 1.05em; margin: 0 0 8px; }
+  .builder h3 { font-size: .9em; margin: 12px 0 6px; }
+  .preview { white-space: pre-wrap; background: var(--soft); border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: .92em; }
+  .empty { text-align: center; padding: 48px 16px; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+    padding: 8px 14px; border-radius: 10px; font-size: .9em; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main id="app"><p class="dim">Loading…</p></main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/page.js"></script>
+</body>
+</html>
