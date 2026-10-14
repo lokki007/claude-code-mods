@@ -4,7 +4,7 @@ Two small mods for [Claude Code](https://claude.com/claude-code) that make it ea
 
 | Mod | What you get |
 | --- | --- |
-| **recap** | After Claude finishes a real piece of work, a side pane lists 28–40 possible next moves, color-coded by direction and ranked 80/20. Pick a few and it writes your next prompt for you. It also writes plain progress notes and a progress page for your clients. |
+| **recap** | After Claude (or ChatGPT Codex) finishes a real piece of work, a side pane lists 28–40 possible next moves, color-coded by direction and ranked 80/20. Pick a few and it writes your next prompt for you. It also writes plain progress notes and a progress page for your clients. |
 | **turn-status** | A quiet one-line band above the prompt while Claude works: what it is doing right now, how long it has been going, task progress and failures. It hides itself when Claude is idle. |
 
 ## Install
@@ -74,6 +74,20 @@ Commands: `/recap` opens the pane, `/recap again` brews fresh options, `/recap d
 What's next for it: a [daily digest across all your projects](docs/daily-digest-sketch.md) (a sketch).
 
 How it works: the options come from a short follow-up question to Claude about the conversation that just happened, so they can point at real code. It costs a little extra per qualifying turn (most of the conversation is served from the prompt cache); if that fails it falls back to the small, fast model.
+
+### recap in ChatGPT Codex
+
+The same recap works with [Codex](https://openai.com/codex): the same 28–40 ranked options, the same Explain to client notes, and the same progress diary and page. The diary and page are shared with Claude, so one project has one diary whichever app did the work.
+
+Codex can't show a side pane inside its window, so the options open in a small **companion page** in your browser (it stays on your computer, at `http://127.0.0.1:47823`). Keep it open beside Codex:
+
+- After each Codex turn that changed files or dug through things, new options appear there by themselves, usually within a minute or two.
+- Pick options, choose Where and Questions, then **Copy prompt** and paste it into Codex.
+- **✉ Explain to client** works there too, with the tone, client name, sign-off and 🧸 Even simpler.
+
+Install it the same way, from Codex's plugin list. Add this repository as a marketplace (`codex plugin marketplace add lokki007/claude-code-mods`), then run `codex plugin add recap@lokki-mods`. The first time, Codex asks you to trust recap's hook. To open the page by hand, run `node <recap folder>/codex/open.mjs`.
+
+How it works: when Codex finishes a turn, recap's hook hands the turn to a background helper and returns at once, so Codex is never held up. The helper asks Codex itself for the options (quickly, read-only, without saving a session), so it needs no extra account or key: it uses your ChatGPT plan.
 
 ## turn-status: a quiet live status band
 

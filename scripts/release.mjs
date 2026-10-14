@@ -5,6 +5,7 @@
 //   3. commits the release, so every version has history
 //   4. refreshes the installed copy (the lokki-mods marketplace points at this folder)
 //   5. keeps only the newest cached copy and checks nothing points at an older one
+//      (a mod with a Codex part, .codex-plugin/, is also rebuilt, tested and refreshed in Codex)
 //   6. with --stage, pushes to the staging branch and checks a fresh install from it on GitHub;
 //      with --publish, pushes to the public version (main) instead
 //
@@ -27,7 +28,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MARKET_FILE = join(REPO, '.claude-plugin', 'marketplace.json')
 const INSTALLED = join(homedir(), '.claude', 'plugins', 'installed_plugins.json')
 /** Laid down by Claude Code for the editor; never part of a mod. */
-const SKIP = ['.claude-plugin/types', 'tsconfig.json', 'node_modules']
+const SKIP = ['.claude-plugin/types', 'tsconfig.json', 'node_modules', '.orphaned_at']
 
 const args = process.argv.slice(2)
 const flag = name => args.includes(`--${name}`)
@@ -101,6 +102,22 @@ const runTests = (dir, label) => {
   return out.trim().split('\n').slice(-3, -1).join(', ')
 }
 
+/** The Codex part's tests (node --test), when a mod has one; returns the summary, or fails. */
+const runCodexTests = (dir, label) => {
+  const testDir = join(dir, 'codex', 'test')
+  if (!existsSync(testDir)) return ''
+  const files = readdirSync(testDir).filter(f => /\.spec\.mjs$/.test(f)).map(f => join(testDir, f))
+  let out = ''
+  try {
+    out = execFileSync(process.execPath, ['--test', ...files], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: dir })
+  } catch (err) {
+    out = String(err?.stdout ?? '') + String(err?.stderr ?? '')
+    fail(`${label}: the Codex part fails its tests:\n${out.trim().split('\n').slice(-30).join('\n')}`)
+  }
+  const n = out.match(/ℹ pass (\d+)/)?.[1] ?? '?'
+  return `Codex part: ${n} pass`
+}
+
 /** owner/repo of the GitHub remote. */
 const githubRepo = () => {
   const url = git('remote', 'get-url', 'origin').trim()
@@ -127,7 +144,8 @@ const verifyFromGitHub = (ref, want) => {
       const base = join(config, 'plugins', 'cache', MARKETPLACE, name)
       const dir = join(base, version)
       if (!existsSync(dir)) fail(`GitHub (${source}) did not hand over ${name} ${version}; it has ${existsSync(base) ? readdirSync(base).join(', ') : 'nothing'}`)
-      say(`  ${name} ${version} from GitHub: ${hasTests(dir) ? runTests(dir, `${name} ${version} from GitHub`) : 'installed'}`)
+      const codexPart = runCodexTests(dir, `${name} ${version} from GitHub`)
+      say(`  ${name} ${version} from GitHub: ${hasTests(dir) ? runTests(dir, `${name} ${version} from GitHub`) : 'installed'}${codexPart ? `; ${codexPart}` : ''}`)
     }
   } finally {
     rmSync(config, { recursive: true, force: true })
@@ -178,6 +196,8 @@ if (!mod) fail('Which mod? Usage: node scripts/release.mjs <mod> [patch|minor|ma
 if (flag('stage') && flag('publish')) fail('Choose one: --stage (the staging branch) or --publish (the public version)')
 const modDir = join(REPO, 'plugins', mod)
 const manifestPath = join(modDir, '.claude-plugin', 'plugin.json')
+const codexManifestPath = join(modDir, '.codex-plugin', 'plugin.json')
+const hasCodexPart = existsSync(codexManifestPath)
 if (!existsSync(manifestPath)) fail(`No mod "${mod}" in ${join(REPO, 'plugins')}`)
 
 const bump = (version, how) => {
@@ -195,13 +215,19 @@ const market = readJson(MARKET_FILE)
 const before = manifest.version ?? '0.0.0'
 const version = bump(before, bumpArg)
 say(`${mod}: ${before} → ${version}`)
-const original = { manifest: readFileSync(manifestPath, 'utf8'), market: readFileSync(MARKET_FILE, 'utf8') }
+const original = {
+  manifest: readFileSync(manifestPath, 'utf8'),
+  market: readFileSync(MARKET_FILE, 'utf8'),
+  codex: hasCodexPart ? readFileSync(codexManifestPath, 'utf8') : '',
+}
 const undoBump = () => {
   writeFileSync(manifestPath, original.manifest)
   writeFileSync(MARKET_FILE, original.market)
+  if (hasCodexPart) writeFileSync(codexManifestPath, original.codex)
 }
 if (!isDry) {
   writeJson(manifestPath, { ...manifest, version })
+  if (hasCodexPart) writeJson(codexManifestPath, { ...readJson(codexManifestPath), version })
   const entry = market.plugins.find(p => p.name === mod)
   if (entry) Object.assign(entry, { version, description: manifest.description })
   else market.plugins.push({ name: mod, source: `./plugins/${mod}`, description: manifest.description, version })
@@ -213,12 +239,16 @@ const synced = syncShared(mod, { check: isDry })
 if (synced.length > 0) say(`${isDry ? 'Would sync' : 'Synced'} shared helpers: ${synced.join(', ')}`)
 say(`Checking with ${CLAUDE}`)
 try {
+  if (hasCodexPart && existsSync(join(modDir, 'codex', 'build.mjs'))) {
+    execFileSync(process.execPath, [join(modDir, 'codex', 'build.mjs'), ...(isDry ? ['--check'] : [])], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
   const validated = claude('plugin', 'validate', modDir)
   if (!/Validation passed/.test(validated)) throw new Error(validated)
   if (hasTests(modDir)) {
     const tested = claude('plugin', 'test', modDir)
     if (!/\b0 fail\b/.test(tested)) throw new Error(tested)
     say(`Tests: ${tested.trim().split('\n').slice(-3).join(' ')}`)
+    if (hasCodexPart) say(runCodexTests(modDir, mod))
   } else {
     say('No tests in this mod')
   }
@@ -248,8 +278,24 @@ const isInstalled = Boolean((records.plugins ?? records)[key])
 claude('plugin', isInstalled ? 'update' : 'install', key, '--scope', 'user')
 const cached = join(CACHE_DIR, mod, version)
 if (!existsSync(cached)) fail(`The plugin cache has no ${mod} ${version} at ${cached}`)
+// An open chat can mark a just-installed copy as unused before the install record names it: unmark it.
+rmSync(join(cached, '.orphaned_at'), { force: true })
 if (!sameFiles(modDir, cached)) fail(`The cached ${mod} ${version} differs from ${modDir}`)
 say(`Installed ${key} ${version}; the cached copy matches the repository`)
+
+// Codex reads the same marketplace folder: refresh its copy when it has the mod.
+if (hasCodexPart) {
+  try {
+    const codexBin = process.platform === 'win32' ? 'codex.cmd' : 'codex'
+    const listed = execFileSync(codexBin, ['plugin', 'list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' })
+    if (new RegExp(`${mod}@${MARKETPLACE}\\s+installed`).test(listed)) {
+      execFileSync(codexBin, ['plugin', 'add', `${mod}@${MARKETPLACE}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' })
+      say(`Refreshed ${mod} in Codex`)
+    }
+  } catch {
+    say('Codex is not installed here (or would not answer): its copy was left as it is')
+  }
+}
 
 // 5. Keep only the newest cached copy, and make sure nothing points at an older one.
 for (const old of readdirSync(join(CACHE_DIR, mod)).filter(v => v !== version)) {
