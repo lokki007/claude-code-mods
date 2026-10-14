@@ -1,13 +1,13 @@
 // Running things from the Codex side: Codex itself (for the recap and the
 // "even simpler" note), the companion page's server, and the browser.
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PORT } from './core.mjs'
+import { port as defaultPort } from './core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -74,8 +74,26 @@ export const askCodex = async (prompt, cwd, { timeoutMs = 6 * 60_000 } = {}) => 
   }
 }
 
+/**
+ * Starts a node script that outlives its caller. Codex waits for everything a
+ * hook starts, so on Windows it is started by the system's process service
+ * instead, outside Codex's process group (its settings travel as arguments or
+ * in a file, since it does not inherit this environment).
+ */
+export const launch = (script, args = []) => {
+  if (process.platform === 'win32' && process.env.RECAP_PLAIN_SPAWN !== '1') {
+    const line = [process.execPath, script, ...args].map(a => `"${a}"`).join(' ').replace(/'/g, "''")
+    const ps = "$s = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }; "
+      + `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${line}'; CurrentDirectory = '${HERE.replace(/'/g, "''")}'; ProcessStartupInformation = $s }; `
+      + 'exit [int]$r.ReturnValue'
+    const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 10_000 })
+    if (run.status === 0) return
+  }
+  spawn(process.execPath, [script, ...args], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+}
+
 /** Whether the companion page's server answers. */
-export const isServing = (port = PORT) => new Promise(resolve => {
+export const isServing = (port = defaultPort()) => new Promise(resolve => {
   const req = request({ host: '127.0.0.1', port, path: '/api/ping', timeout: 800 }, res => {
     res.resume()
     resolve(res.statusCode === 200)
@@ -86,11 +104,9 @@ export const isServing = (port = PORT) => new Promise(resolve => {
 })
 
 /** Starts the server in the background if it is not running; true when it was just started. */
-export const ensureServer = async (port = PORT) => {
+export const ensureServer = async (port = defaultPort()) => {
   if (await isServing(port)) return false
-  spawn(process.execPath, [join(HERE, 'server.mjs')], {
-    detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, RECAP_PORT: String(port) },
-  }).unref()
+  launch(join(HERE, 'server.mjs'), ['--port', String(port)])
   for (let i = 0; i < 20; i++) {
     if (await isServing(port)) return true
     await new Promise(r => setTimeout(r, 150))
@@ -99,7 +115,7 @@ export const ensureServer = async (port = PORT) => {
 }
 
 /** Opens the companion page in the person's browser (not in tests or the nightly check). */
-export const openPage = (port = PORT) => {
+export const openPage = (port = defaultPort()) => {
   if (process.env.RECAP_NO_OPEN === '1') return
   const url = `http://127.0.0.1:${port}/`
   if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref()

@@ -1,6 +1,6 @@
 {
   "name": "recap",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Next-prompt builder after real work: 28-40 customer-focused options in eight color-coded directions, ranked 80/20; client-ready progress notes, diary and page; Claude can interview you with clickable questions. Also works with ChatGPT Codex through a companion page.",
   "author": {
     "name": "lokki007"

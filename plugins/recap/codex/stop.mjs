@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Codex's Stop hook: Codex runs this when it finishes a turn. It hands the turn
 // to brew.mjs in the background and returns at once, so Codex is never held up.
-import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { places } from './core.mjs'
+import { places, recapEnv } from './core.mjs'
+import { launch } from './run.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -25,6 +25,6 @@ const { codex } = places()
 const pending = join(codex, 'pending')
 mkdirSync(pending, { recursive: true })
 const file = join(pending, `${Date.now()}-${String(payload.turn_id ?? 'turn').replace(/[^\w-]/g, '')}.json`)
-writeFileSync(file, JSON.stringify(payload))
-spawn(process.execPath, [join(HERE, 'brew.mjs'), file], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+writeFileSync(file, JSON.stringify({ payload, env: recapEnv() }))
+launch(join(HERE, 'brew.mjs'), [file])
 process.exit(0)

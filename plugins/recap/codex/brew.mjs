@@ -101,7 +101,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const file = process.argv[2]
   let payload = null
   try {
-    payload = JSON.parse(readFileSync(file, 'utf8'))
+    const handed = JSON.parse(readFileSync(file, 'utf8'))
+    // The hook's RECAP_* settings: this process was started outside Codex and did not inherit them.
+    Object.assign(process.env, handed.env ?? {})
+    payload = handed.payload ?? null
   } catch { /* nothing to do */ }
   rmSync(file, { force: true })
   if (payload) {

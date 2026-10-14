@@ -6,7 +6,7 @@ import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PORT, loadStore, note, places, updateStore } from './core.mjs'
+import { loadStore, note, places, port, updateStore } from './core.mjs'
 import {
   DEFAULT_CLIENT, TONES, diaryFile, diaryHeader, diaryPage, forClient, learnFrom, plain, projectName, rememberWins, simplerPrompt,
   withHeader,
@@ -14,6 +14,10 @@ import {
 import { askCodex } from './run.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+// Started outside Codex, the port comes as an argument.
+const portArg = process.argv.indexOf('--port')
+if (portArg > 0 && process.argv[portArg + 1]) process.env.RECAP_PORT = process.argv[portArg + 1]
+const PORT = port()
 const P = places()
 
 /** Only this machine's browser, by name: no other site can talk to the server (DNS rebinding included). */

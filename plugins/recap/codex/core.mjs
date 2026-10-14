@@ -20,7 +20,10 @@ export const places = (home = process.env.RECAP_HOME || homedir()) => {
 }
 
 /** The port the companion page is served on (127.0.0.1 only). */
-export const PORT = Number(process.env.RECAP_PORT) || 47823
+export const port = () => Number(process.env.RECAP_PORT) || 47823
+
+/** The recap's own settings (RECAP_*), carried to processes started outside Codex. */
+export const recapEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('RECAP_')))
 
 // ---- reading a Codex turn ------------------------------------------------------------------
 
