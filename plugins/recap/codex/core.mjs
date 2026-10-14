@@ -115,7 +115,7 @@ export const readTurn = (jsonl, turnId) => {
 
 /** What Codex is asked: the recap's own instructions, the turn, and a reminder to answer in JSON only. */
 export const recapPrompt = (log, answer, saved = [], ideas = []) =>
-  `${SYSTEM}\n\n${promptFor(log, answer, saved, ideas)}\n\nDo not change any files and do not run commands: just read the above and reply with the JSON only.`
+  `${SYSTEM}\n\n${promptFor(log, answer, saved, ideas)}\n\nYou may read the files in this folder to check what was really done. Do not change any files, then reply with the JSON only.`
 
 // ---- the store ----------------------------------------------------------------------------
 

@@ -92,26 +92,47 @@ export const launch = (script, args = []) => {
   spawn(process.execPath, [script, ...args], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
 }
 
-/** Whether the companion page's server answers. */
-export const isServing = (port = defaultPort()) => new Promise(resolve => {
+/** The folder the running page server was started from, or null when none answers. */
+export const servingFrom = (port = defaultPort()) => new Promise(resolve => {
   const req = request({ host: '127.0.0.1', port, path: '/api/ping', timeout: 800 }, res => {
-    res.resume()
-    resolve(res.statusCode === 200)
+    let body = ''
+    res.on('data', d => { body += d })
+    res.on('end', () => {
+      try { resolve(res.statusCode === 200 ? String(JSON.parse(body).root ?? '?') : null) } catch { resolve(null) }
+    })
   })
+  req.on('error', () => resolve(null))
+  req.on('timeout', () => { req.destroy(); resolve(null) })
+  req.end()
+})
+
+/** Whether the companion page's server answers. */
+export const isServing = async (port = defaultPort()) => (await servingFrom(port)) !== null
+
+/** Asks an older server to step aside. */
+const quit = port => new Promise(resolve => {
+  const req = request({ host: '127.0.0.1', port, path: '/api/quit', method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 800 }, res => { res.resume(); resolve(true) })
   req.on('error', () => resolve(false))
   req.on('timeout', () => { req.destroy(); resolve(false) })
-  req.end()
+  req.end('{}')
 })
 
 /** Starts the server in the background if it is not running; true when it was just started. */
 export const ensureServer = async (port = defaultPort()) => {
-  if (await isServing(port)) return false
+  const root = await servingFrom(port)
+  if (root === HERE) return false
+  // A server from an older copy of the mod (before an update): replace it, quietly.
+  const wasRunning = root !== null
+  if (wasRunning) {
+    await quit(port)
+    for (let i = 0; i < 20 && (await isServing(port)); i++) await new Promise(r => setTimeout(r, 100))
+  }
   launch(join(HERE, 'server.mjs'), ['--port', String(port)])
   for (let i = 0; i < 20; i++) {
-    if (await isServing(port)) return true
+    if (await isServing(port)) break
     await new Promise(r => setTimeout(r, 150))
   }
-  return true
+  return !wasRunning
 }
 
 /** Opens the companion page in the person's browser (not in tests or the nightly check). */

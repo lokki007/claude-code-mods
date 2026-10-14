@@ -66,7 +66,9 @@ const routes = {
   'GET /': (req, res) => send(res, 200, readFileSync(join(HERE, 'page.html')), 'text/html; charset=utf-8'),
   'GET /page.js': (req, res) => send(res, 200, readFileSync(join(HERE, 'page.js')), 'text/javascript; charset=utf-8'),
   'GET /logic.mjs': (req, res) => send(res, 200, readFileSync(join(HERE, 'logic.mjs')), 'text/javascript; charset=utf-8'),
-  'GET /api/ping': (req, res) => send(res, 200, { ok: true }),
+  'GET /api/ping': (req, res) => send(res, 200, { ok: true, root: HERE }),
+  // A newer copy of the mod takes over the port: this one steps aside.
+  'POST /api/quit': (req, res) => { send(res, 200, { ok: true }); setTimeout(() => process.exit(0), 50) },
   'GET /api/state': (req, res) => {
     const rev = existsSync(P.store) ? statSync(P.store).mtimeMs : 0
     send(res, 200, { rev, store: loadStore(P.store) })
