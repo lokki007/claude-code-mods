@@ -1,7 +1,7 @@
 // Running things from the Codex side: Codex itself (for the recap and the
 // "even simpler" note), the companion page's server, and the browser.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,7 +15,17 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 export const findCodex = () => {
   if (process.env.RECAP_CODEX_BIN) return { cmd: process.env.RECAP_CODEX_BIN, shell: /\.(cmd|bat)$/i.test(process.env.RECAP_CODEX_BIN) }
   if (process.platform === 'win32') {
-    const npm = join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe')
+    // The Codex app keeps its own, newest Codex here (one folder per version): the npm one can lag
+    // behind and refuse the newest models.
+    const appBins = join(process.env.LOCALAPPDATA ?? '', 'OpenAI', 'Codex', 'bin')
+    if (existsSync(appBins)) {
+      const newest = readdirSync(appBins)
+        .map(d => join(appBins, d, 'codex.exe'))
+        .filter(p => existsSync(p))
+        .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
+      if (newest) return { cmd: newest, shell: false }
+    }
+    const npm =join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe')
     if (existsSync(npm)) return { cmd: npm, shell: false }
     try {
       const found = execFileSync('where', ['codex.exe'], { encoding: 'utf8' }).split(/\r?\n/).find(Boolean)

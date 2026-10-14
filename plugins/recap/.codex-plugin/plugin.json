@@ -1,6 +1,6 @@
 {
   "name": "recap",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "After Codex finishes a piece of work: 28-40 next-step options ranked 80/20 in a companion page, a prompt builder, and client-ready progress notes, diary and page.",
   "author": {
     "name": "lokki007",
